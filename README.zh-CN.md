@@ -32,7 +32,20 @@ Wind_disturbance_simulation_part1/
 │   │   ├── simulation.py       # MuJoCo、飞行控制与面板
 │   │   ├── wind_backends.py    # PINN 与解析受力接口
 │   │   ├── training/           # 参考数据、训练与评估
-│   │   └── assets/             # 飞机、场景与模型权重
+│   │   └── assets/             # MuJoCo 模型与资源
+│   │       ├── scenes/default/
+│   │       │   └── robot_quadrotor_950_with_arm.xml
+│   │       ├── robot_models/
+│   │       │   ├── quadrotor_950/
+│   │       │   │   ├── quadrotor_950.xml
+│   │       │   │   └── meshes/
+│   │       │   ├── airbot_play/
+│   │       │   │   ├── airbot_play.xml
+│   │       │   │   └── meshes/
+│   │       │   └── scenes/
+│   │       │       └── ground.xml
+│   │       ├── checkpoints/     # 预训练权重
+│   │       └── configs/         # PX4 参数
 │   └── pymavlink/              # 内置 MAVLink 库
 ├── configs/pinn/               # 训练配置
 ├── runtime/px4/                # 预编译 PX4 SITL
@@ -44,6 +57,8 @@ Wind_disturbance_simulation_part1/
 ├── pyproject.toml
 └── requirements.txt
 ~~~
+
+MuJoCo 主场景入口：[robot_quadrotor_950_with_arm.xml](src/wind_field_simulation/assets/scenes/default/robot_quadrotor_950_with_arm.xml)。
 
 ## 安装
 
