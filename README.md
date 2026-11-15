@@ -32,7 +32,20 @@ Wind_disturbance_simulation_part1/
 │   │   ├── simulation.py       # MuJoCo, flight control and panel
 │   │   ├── wind_backends.py    # PINN and analytical force adapters
 │   │   ├── training/           # Reference data, training and evaluation
-│   │   └── assets/             # Aircraft, scenes and checkpoints
+│   │   └── assets/             # MuJoCo models and assets
+│   │       ├── scenes/default/
+│   │       │   └── robot_quadrotor_950_with_arm.xml
+│   │       ├── robot_models/
+│   │       │   ├── quadrotor_950/
+│   │       │   │   ├── quadrotor_950.xml
+│   │       │   │   └── meshes/
+│   │       │   ├── airbot_play/
+│   │       │   │   ├── airbot_play.xml
+│   │       │   │   └── meshes/
+│   │       │   └── scenes/
+│   │       │       └── ground.xml
+│   │       ├── checkpoints/     # Pretrained weights
+│   │       └── configs/         # PX4 parameters
 │   └── pymavlink/              # Bundled MAVLink library
 ├── configs/pinn/               # Training configurations
 ├── runtime/px4/                # Prebuilt PX4 SITL
@@ -44,6 +57,8 @@ Wind_disturbance_simulation_part1/
 ├── pyproject.toml
 └── requirements.txt
 ~~~
+
+MuJoCo scene entry: [robot_quadrotor_950_with_arm.xml](src/wind_field_simulation/assets/scenes/default/robot_quadrotor_950_with_arm.xml).
 
 ## Installation
 
