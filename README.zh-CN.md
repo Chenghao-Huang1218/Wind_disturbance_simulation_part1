@@ -23,6 +23,28 @@
 - 使用预训练 X4-950 PINN，将风输入转换为附加气动力。
 - MuJoCo 场景、控制面板和轨迹对比图。
 
+## 目录结构
+
+~~~text
+Wind_disturbance_simulation_part1/
+├── src/
+│   ├── wind_field_simulation/
+│   │   ├── simulation.py       # MuJoCo、飞行控制与面板
+│   │   ├── wind_backends.py    # PINN 与解析受力接口
+│   │   ├── training/           # 参考数据、训练与评估
+│   │   └── assets/             # 飞机、场景与模型权重
+│   └── pymavlink/              # 内置 MAVLink 库
+├── configs/pinn/               # 训练配置
+├── runtime/px4/                # 预编译 PX4 SITL
+├── scripts/                    # 启动与实验入口
+├── tests/                      # 离线检查
+├── docs/                       # 安装说明、报告与演示素材
+├── licenses/                   # 第三方许可证
+├── outputs/                    # 生成的日志与结果
+├── pyproject.toml
+└── requirements.txt
+~~~
+
 ## 安装
 
 验证环境：**Ubuntu 24.04 x86-64 / Python 3.12**，MuJoCo 3.6.0、NumPy 2.4.4、PyTorch 2.11.0、Matplotlib 3.10.9；图形界面需要 Tk 与 OpenGL。
@@ -87,7 +109,7 @@ g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B)
 \bigr].
 $$
 
-$R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度，$\mathbf w^W$ 为风速，$P_{xy}=\operatorname{diag}(1,1,0)$ 保留水平加速度。
+$R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度，$\mathbf w^W$ 为风速，$P_{xy}=\mathrm{diag}(1,1,0)$ 保留水平加速度。
 
 结果依次经过 EMA（$\alpha=0.05$）、各轴 ±6 m/s² 限幅，再乘整机质量 8.0004 kg，施加到根 body。
 
