@@ -23,6 +23,28 @@ Single-UAV wind disturbance simulation in MuJoCo with PX4 SITL, a PINN aerodynam
 - A pretrained X4-950 PINN converts wind into additional aerodynamic forces.
 - MuJoCo visualization, a control panel and trajectory comparison plots.
 
+## Project structure
+
+~~~text
+Wind_disturbance_simulation_part1/
+├── src/
+│   ├── wind_field_simulation/
+│   │   ├── simulation.py       # MuJoCo, flight control and panel
+│   │   ├── wind_backends.py    # PINN and analytical force adapters
+│   │   ├── training/           # Reference data, training and evaluation
+│   │   └── assets/             # Aircraft, scenes and checkpoints
+│   └── pymavlink/              # Bundled MAVLink library
+├── configs/pinn/               # Training configurations
+├── runtime/px4/                # Prebuilt PX4 SITL
+├── scripts/                    # Launch and experiment entry points
+├── tests/                      # Offline checks
+├── docs/                       # Guides, reports and demo media
+├── licenses/                   # Third-party licenses
+├── outputs/                    # Generated logs and results
+├── pyproject.toml
+└── requirements.txt
+~~~
+
 ## Installation
 
 Tested on **Ubuntu 24.04 x86-64 / Python 3.12**, with MuJoCo 3.6.0, NumPy 2.4.4, PyTorch 2.11.0 and Matplotlib 3.10.9. The GUI requires Tk and OpenGL.
@@ -87,7 +109,7 @@ g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B)
 \bigr].
 $$
 
-$R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^W$ is wind velocity, and $P_{xy}=\operatorname{diag}(1,1,0)$ retains horizontal acceleration.
+$R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^W$ is wind velocity, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains horizontal acceleration.
 
 The result passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
 
