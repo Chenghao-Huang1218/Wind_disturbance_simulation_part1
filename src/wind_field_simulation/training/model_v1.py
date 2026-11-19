@@ -9,9 +9,16 @@ from typing import Any
 from numpy.typing import NDArray
 from torch import Tensor, nn
 
-from .reference_aerodynamics import reference_wrench_body
+from .reference_aerodynamics import (
+    LEGACY_WIND_MAX_M_S,
+    WIDE_WIND_MAX_M_S,
+    reference_wind_limit,
+    reference_wrench_body,
+    validate_wide_inspection_domain,
+)
 
 KIND = "x4_950_wind_increment_xy_v1"
+WIDE_KIND = "x4_950_wind_increment_xy_v2"
 
 
 def fit_normalization(
@@ -60,11 +67,17 @@ class X4WindAeroV1(nn.Module):
         input_std: Training per-axis standard deviations.
         output_scale: Training full-acceleration scales (m/s²).
         prior_coefficients: Nonnegative nominal unit-axis drag coefficients.
+        wind_max_horizontal_m_s: Recorded horizontal setting limit for paired
+            inference. The six-dimensional core inputs have their own domain.
     """
 
     def __init__(self, input_mean: NDArray, input_std: NDArray,
-                 output_scale: NDArray, prior_coefficients: NDArray) -> None:
+                 output_scale: NDArray, prior_coefficients: NDArray, *,
+                 wind_max_horizontal_m_s: float = LEGACY_WIND_MAX_M_S) -> None:
         super().__init__()
+        if wind_max_horizontal_m_s not in (LEGACY_WIND_MAX_M_S, WIDE_WIND_MAX_M_S):
+            raise ValueError("Unsupported wind_max_horizontal_m_s")
+        self.wind_max_horizontal_m_s = float(wind_max_horizontal_m_s)
         for name, values, length in (
             ("input_mean", input_mean, 6), ("input_std", input_std, 6),
             ("output_scale", output_scale, 3), ("prior_coefficients", prior_coefficients, 3),
@@ -106,7 +119,7 @@ def predict_increment(
         velocity_world: Root O velocities [N,3], m/s.
         rotation: Proper B→W matrices [N,3,3].
         omega_body: Angular rates [N,3], rad/s.
-        wind_world: Horizontal wind [N,3], resultant <=3 m/s.
+        wind_world: Horizontal wind [N,3], within the model's wind domain.
         project_xy: Project here for offline labels (default); False returns
             complete raw W differences for runtime diagnostics. The app then
             performs its own unchanged XY projection before filtering.
@@ -126,9 +139,11 @@ def predict_increment(
             or not all(np.isfinite(value).all() for value in
                        (velocity_world, rotation, omega_body, wind_world))):
         raise ValueError("Finite batch state shapes are required")
+    wind_limit = model.wind_max_horizontal_m_s
     if (np.any(wind_world[:, 2] != 0)
-            or np.any(np.linalg.norm(wind_world[:, :2], axis=1) > np.nextafter(3., np.inf))):
-        raise ValueError("Require horizontal wind <=3 m/s")
+            or np.any(np.hypot(wind_world[:, 0], wind_world[:, 1])
+                      > np.nextafter(wind_limit, np.inf))):
+        raise ValueError(f"Require horizontal wind <={wind_limit:g} m/s")
     if (not np.allclose(rotation.swapaxes(1, 2) @ rotation, np.eye(3), atol=1e-8)
             or not np.allclose(np.linalg.det(rotation), 1, atol=1e-8)):
         raise ValueError("Require proper body-to-world rotation")
@@ -153,22 +168,37 @@ def predict_increment(
 
 
 def load_checkpoint(path: Path) -> tuple[X4WindAeroV1, dict[str, Any]]:
-    """Load only a self-describing X4 v1 CPU candidate, rejecting legacy kinds.
+    """Load a self-describing X4 v1 or v2 candidate, rejecting legacy kinds.
 
     Args:
-        path: Pilot checkpoint saved by train_v1, not an old 17D checkpoint.
+        path: X4 six-dimensional checkpoint.
 
     Returns:
         Model in eval mode and checkpoint metadata (including state tensors).
     """
     saved = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(saved, dict) or saved.get("kind") != KIND:
-        raise ValueError("Unsupported checkpoint kind; expected X4 v1, not legacy weights")
+    if not isinstance(saved, dict) or saved.get("kind") not in (KIND, WIDE_KIND):
+        raise ValueError("Unsupported checkpoint kind; expected X4 v1 or v2")
     if saved.get("feature_version") != "body_air_velocity_omega_6d_v1":
         raise ValueError("Unsupported feature version")
+    if saved["kind"] == WIDE_KIND:
+        wind_limit = saved.get("wind_max_horizontal_m_s")
+        if type(wind_limit) not in (int, float) or wind_limit != WIDE_WIND_MAX_M_S:
+            raise ValueError("X4 v2 wind_max_horizontal_m_s must be 10")
+        reference = saved.get("reference_config")
+        if not isinstance(reference, dict) or reference_wind_limit(reference) != wind_limit:
+            raise ValueError("X4 v2 checkpoint wind domain differs from its embedded reference")
+        validate_wide_inspection_domain(reference)
+        if saved.get("state_domain") != reference["inspection_state_domain"]:
+            raise ValueError("X4 v2 checkpoint state_domain differs from its embedded reference")
+    else:
+        wind_limit = LEGACY_WIND_MAX_M_S
+        recorded = saved.get("wind_max_horizontal_m_s", wind_limit)
+        if type(recorded) not in (int, float) or recorded != wind_limit:
+            raise ValueError("X4 v1 wind_max_horizontal_m_s must be 3")
     stats = saved["normalization"]
     model = X4WindAeroV1(stats["input_mean"], stats["input_std"], stats["full_scale"],
-                         saved["prior_coefficients"])
+                         saved["prior_coefficients"], wind_max_horizontal_m_s=wind_limit)
     model.load_state_dict(saved["state_dict"], strict=True)
     for name, expected in (("input_mean", stats["input_mean"]),
                             ("input_std", stats["input_std"]),

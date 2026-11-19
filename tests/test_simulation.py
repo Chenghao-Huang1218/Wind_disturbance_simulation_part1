@@ -767,6 +767,13 @@ def test_realtime_predefined_plot_shows_target_and_updates_actual() -> None:
     actual_x, actual_y = plot.actual_line.get_data()
     np.testing.assert_allclose(actual_x, [2.0, 2.1, 2.2])
     np.testing.assert_allclose(actual_y, [-3.0, -2.9, -2.8])
+
+    plot.axis.set_xlim(1.95, 2.05)
+    simulation.update_realtime_predefined_trajectory_plot(
+        plot, position_world=np.array([2.4, -1.6, 1.0]), sim_time=5.6,
+    )
+    assert plot.axis.get_ylim()[1] > -1.6
+    assert plot.axis.get_xlim() == (1.95, 2.05)
     plot.close()
 
 
@@ -1088,8 +1095,34 @@ def test_request_arm_sends_only_arm_command() -> None:
 
     calls = connections[1].command_long_calls
     assert len(calls) == 1
+    assert calls[0][:2] == (1, 1)
     assert calls[0][2] == simulation.mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
     assert calls[0][4] == pytest.approx(1.0)
+
+
+def test_cli_routes_commands_to_selected_px4_system() -> None:
+    sim = load_simulation_module()
+    config = sim.parse_config([
+        "--sim-tcp-port", "4566", "--command-udp-port", "14586",
+        "--target-system", "7",
+    ])
+    app = sim.WindSimulationApp(config)
+    try:
+        command_link = FakeMavlinkConnection()
+        app.bridge.command_link = command_link
+        app.bridge.request_arm()
+        assert command_link.mav.command_long_calls[0][:2] == (7, 1)
+        assert app.bridge.sim_tcp_port == 4566
+        assert app.bridge.command_udp_port == 14586
+    finally:
+        app._close_runtime()
+
+
+@pytest.mark.parametrize("target_system", ["0", "256"])
+def test_cli_rejects_invalid_px4_target_system(target_system: str) -> None:
+    sim = load_simulation_module()
+    with pytest.raises(ValueError, match="target-system"):
+        sim.parse_config(["--target-system", target_system])
 
 
 def test_request_offboard_sends_only_mode_command() -> None:
@@ -1764,8 +1797,16 @@ def test_application_sends_accepted_move_target_through_px4_bridge() -> None:
     )
 
 
+@pytest.mark.parametrize(("name", "flags", "expected_duration"), [
+    ("circle", [], 10.0),
+    ("ellipse", [], 20.0),
+    ("square", [], 20.0),
+    ("figure8", [], 30.0),
+    ("circle", ["--trajectory-duration", "12"], 12.0),
+])
 def test_application_trajectory_command_opens_realtime_plot(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, name: str, flags: list[str],
+    expected_duration: float,
 ) -> None:
     """Connects an accepted predefined-trajectory command to its live plot."""
     simulation = load_simulation_module()
@@ -1788,7 +1829,7 @@ def test_application_trajectory_command_opens_realtime_plot(
         shown_figures.append,
     )
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        simulation.parse_config(["--no-viewer", *flags]),
         bridge=RecordingBridge(),
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1797,14 +1838,65 @@ def test_application_trajectory_command_opens_realtime_plot(
     app._process_ui_command(
         simulation.UiCommand(
             simulation.UiCommandType.START_TRAJECTORY,
-            "figure8",
+            name,
         )
     )
 
     assert len(created_trajectories) == 1
     assert created_trajectories[0] is app.active_trajectory
+    assert created_trajectories[0].duration == expected_duration
+    assert created_trajectories[0].size_m == 1.0
     assert app.trajectory_plot is fake_plot
     assert shown_figures == [fake_plot.figure]
+
+
+def test_circle_holds_exact_endpoint_and_draws_the_settling_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Natural completion sends the endpoint and keeps the closing arc visible."""
+    sim = load_simulation_module()
+    monkeypatch.setattr(sim, "show_realtime_figure", lambda _figure: None)
+    bridge = RecordingBridge()
+    bridge.armed = bridge.offboard = True
+    app = sim.WindSimulationApp(
+        sim.parse_config(["--no-viewer"]),
+        bridge=bridge, pinn_predictor=RecordingPinnPredictor(),
+    )
+    try:
+        app.flight_control.flight_state = sim.FlightState.FLYING
+        app.flight_control.armed = True
+        initial_target = app.flight_control.target_position_world.copy()
+        app._process_ui_command(sim.UiCommand(sim.UiCommandType.START_TRAJECTORY, "circle"))
+        plot = app.trajectory_plot
+        assert plot is not None
+        app.data.time = 9.9
+        app._run_iteration()
+        assert np.linalg.norm(bridge.targets[-1] - initial_target) > 0.01
+        app.data.time = 10.0
+        app._run_iteration()
+        assert app.active_trajectory is None
+        assert app.flight_control.active_trajectory_name == "none"
+        np.testing.assert_allclose(bridge.targets[-1], initial_target, atol=1e-12)
+
+        address = app.bindings.main_qpos_adr
+        app.data.qpos[address:address + 2] = [0.05, -0.09]
+        sim.mujoco.mj_forward(app.model, app.data)
+        app.data.time = 12.9
+        app._run_iteration()
+        app.data.qpos[address:address + 2] = [0.01, -0.02]
+        sim.mujoco.mj_forward(app.model, app.data)
+        app.data.time = 13.0
+        app._run_iteration()
+        np.testing.assert_allclose(
+            [plot.actual_line.get_xdata()[-1], plot.actual_line.get_ydata()[-1]],
+            [0.01, -0.02],
+        )
+        sample_count = len(plot.actual_xy)
+        app.data.time = 13.3
+        app._run_iteration()
+        assert len(plot.actual_xy) == sample_count
+    finally:
+        app._close_runtime()
 
 
 def test_exit_button_enqueues_typed_exit_command() -> None:
@@ -1932,6 +2024,8 @@ def test_run_draws_active_wind_before_viewer_sync(
         def __init__(
             self, _command_queue: queue.SimpleQueue,
             initial_wind_world: Any = None,
+            *,
+            wind_max_horizontal_m_s: float = 3.0,
         ) -> None:
             self.figure = SimpleNamespace(show=lambda: None)
 
@@ -2022,6 +2116,8 @@ def test_run_exit_closes_resources_without_viewer_sync(
         def __init__(
             self, _command_queue: queue.SimpleQueue,
             initial_wind_world: Any = None,
+            *,
+            wind_max_horizontal_m_s: float = 3.0,
         ) -> None:
             self.figure = SimpleNamespace(show=lambda: None)
 

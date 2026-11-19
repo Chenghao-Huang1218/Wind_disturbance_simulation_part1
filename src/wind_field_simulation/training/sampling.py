@@ -112,3 +112,107 @@ def sample_pilot_states(
             for key in partitions[0]}
     data["sample_id"] = np.arange(sum(split_counts), dtype=np.int64)
     return data
+
+
+WIDE_SPEED_STRATA = (
+    ("0", 0., 0.), ("(0,0.25)", 0., .25), ("[0.25,1)", .25, 1.),
+    ("[1,2)", 1., 2.), ("[2,3)", 2., 3.), ("3", 3., 3.),
+    ("(3,5)", 3., 5.), ("[5,7)", 5., 7.), ("[7,9)", 7., 9.),
+    ("[9,10)", 9., 10.), ("10", 10., 10.),
+)
+
+
+def sample_wide_partition(seed: int, count: int, split: int) -> dict[str, NDArray]:
+    """Sample balanced, independent 10-pair groups inside the frozen state domain.
+
+    Args:
+        seed: Partition-specific seed. State, direction and radial draws use
+            separate SeedSequence children to preserve nested training prefixes.
+        count: Number of pairs, at least 2880 and divisible by ten.
+        split: 0 for development training, 1 for validation, 2 for formal test.
+
+    Returns:
+        State arrays, group IDs, strata, sector IDs and test challenge membership.
+    """
+    if split not in (0, 1, 2) or count < 2880 or count % 10:
+        raise ValueError("Require a known partition and >=2880 pairs in groups of ten")
+    cell_rng, wind_rng, state_rng, rate_rng = [
+        np.random.default_rng(child) for child in np.random.SeedSequence(seed).spawn(4)
+    ]
+    groups = count // 10
+    grid = len(WIDE_SPEED_STRATA) * 12
+    cells = np.concatenate([cell_rng.permutation(grid) for _ in range((groups + grid - 1) // grid)])
+    stratum, sector = np.divmod(cells[:groups], 12)
+    bounds = np.asarray([(low, high) for _, low, high in WIDE_SPEED_STRATA])
+    lower, upper = bounds[stratum].T
+    wind_draws = wind_rng.random((groups, 3))
+    speed = lower + (upper - lower) * wind_draws[:, 0]
+    if split == 0:
+        degrees = 30 * sector + 30 * wind_draws[:, 1]
+    elif split == 1:
+        degrees = 30 * sector + 15.
+    else:
+        degrees = 30 * sector + np.where(wind_draws[:, 2] < .5, 7.5, 22.5)
+    if split != 0:
+        # Independent axial, diagonal, common 3 m/s and 10 m/s cases.
+        stratum[-24:] = np.repeat([1, 5, 10], 8)
+        speed[-24:] = np.repeat([.18, 3., 10.], 8)
+        degrees[-24:] = np.tile(np.arange(8) * 45., 3)
+        sector[-24:] = (degrees[-24:] // 30).astype(np.int64)
+    xy_direction = np.repeat(np.column_stack((np.cos(np.deg2rad(degrees)),
+                                               np.sin(np.deg2rad(degrees)))), 10, axis=0)
+    speed = np.repeat(speed, 10)
+    wind = np.column_stack((speed[:, None] * xy_direction, np.zeros(count)))
+    # Keep exact nominal radial boundaries legal even after sin/cos roundoff.
+    radius = np.maximum(np.hypot(wind[:, 0], wind[:, 1]), np.linalg.norm(wind[:, :2], axis=1))
+    above_radius = radius > speed
+    wind[above_radius] *= (np.nextafter(speed[above_radius], 0.) / radius[above_radius])[:, None]
+    draws = state_rng.random((count, 6))
+    velocity = np.column_stack((3. * draws[:, 0] * np.cos(2 * np.pi * draws[:, 1]),
+                                3. * draws[:, 0] * np.sin(2 * np.pi * draws[:, 1]),
+                                2. * draws[:, 2] - 1.))
+    euler = (2. * draws[:, 3:] - 1.) * np.array([np.pi / 9, np.pi / 9, np.pi])
+    slot = np.arange(count) % 10
+    velocity[slot == 1] *= .05
+    opposing, following = slot == 2, slot == 3
+    velocity[opposing, :2] = -2.99 * xy_direction[opposing]
+    velocity[opposing, 2] = np.copysign(.99, velocity[opposing, 2])
+    velocity[following, :2] = np.minimum(speed[following], 2.99)[:, None] * xy_direction[following]
+    velocity[following, 2] *= .05
+    edge = (slot == 6) | opposing
+    euler[edge, :2] = np.copysign(np.deg2rad(19.9), euler[edge, :2])
+    angular_draws = rate_rng.random((count, 3))
+    polar_cos = 2. * angular_draws[:, 0] - 1.
+    azimuth = 2. * np.pi * angular_draws[:, 1]
+    polar_sin = np.sqrt(1. - polar_cos ** 2)
+    rates = 1.5 * angular_draws[:, 2] ** (1 / 3)
+    rates[(slot == 5) | opposing] = 1.49
+    rates[slot == 0] = 0.
+    omega = rates[:, None] * np.column_stack((polar_sin * np.cos(azimuth),
+                                                polar_sin * np.sin(azimuth), polar_cos))
+    cosine_roll, cosine_pitch, cosine_yaw = np.cos(euler / 2).T
+    sine_roll, sine_pitch, sine_yaw = np.sin(euler / 2).T
+    quaternion = np.column_stack((
+        cosine_roll * cosine_pitch * cosine_yaw + sine_roll * sine_pitch * sine_yaw,
+        sine_roll * cosine_pitch * cosine_yaw - cosine_roll * sine_pitch * sine_yaw,
+        cosine_roll * sine_pitch * cosine_yaw + sine_roll * cosine_pitch * sine_yaw,
+        cosine_roll * cosine_pitch * sine_yaw - sine_roll * sine_pitch * cosine_yaw,
+    ))
+    challenge = np.zeros(count, dtype=np.int64)
+    if split == 2:
+        special = np.arange(count) >= count - 240
+        challenge[special & opposing & (speed == 10.)] = 1
+        challenge[special & following & (speed < .25)] = 2
+        challenge[special & ((slot == 5) | (slot == 6)) & (speed == 10.)] = 3
+    return {
+        "velocity_world": velocity, "quaternion_wxyz": quaternion,
+        "rotation_body_to_world": body_to_world_rotation(quaternion),
+        "euler_rpy_rad": euler, "omega_body": omega, "wind_world": wind,
+        "split": np.full(count, split, dtype=np.int64),
+        "group_id": np.repeat(np.arange(groups), 10) * 3 + split,
+        "sampling_seed": np.full(count, seed, dtype=np.int64),
+        "sample_id": np.arange(count, dtype=np.int64) * 3 + split,
+        "speed_stratum": np.repeat(stratum, 10),
+        "direction_sector": np.repeat(sector, 10),
+        "challenge_id": challenge,
+    }

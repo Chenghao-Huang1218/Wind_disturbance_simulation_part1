@@ -18,6 +18,12 @@ import mujoco
 import numpy as np
 from numpy.typing import NDArray
 
+from .reference_aerodynamics import (
+    WIDE_WIND_MAX_M_S,
+    reference_wind_limit,
+    validate_wide_inspection_domain,
+)
+
 FloatArray = NDArray[np.float64]
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SCENE = (
@@ -358,6 +364,8 @@ def export_reference_bundle(
     vehicle = export_vehicle_parameters(xml_path)
     manifest = vehicle.pop("geometry_manifest")
     config = json.loads(config_path.read_text())
+    if reference_wind_limit(config) == WIDE_WIND_MAX_M_S:
+        validate_wide_inspection_domain(config)
     reference = {
         **config, "mass_total_kg": vehicle["mass_total_kg"],
         "proxies": manifest["proxies"],
@@ -401,6 +409,8 @@ def load_reference_bundle(
     reference = json.loads(path.read_text())
     vehicle = json.loads((path.parent / "vehicle_parameters.json").read_text())
     geometry = json.loads((path.parent / "geometry_manifest.json").read_text())
+    if not all(isinstance(item, dict) for item in (reference, vehicle, geometry)):
+        raise ValueError("Reference, vehicle and geometry must be JSON objects")
     payload = {key: value for key, value in reference.items()
                if key != "reference_sha256"}
     if content_sha256(payload) != reference.get("reference_sha256"):
@@ -410,6 +420,8 @@ def load_reference_bundle(
         raise ValueError("Vehicle/geometry fingerprint mismatch")
     if reference.get("kind") != "x4_950_component_drag_reference_v1":
         raise ValueError("Unsupported analytical reference schema")
+    if reference_wind_limit(reference) == WIDE_WIND_MAX_M_S:
+        validate_wide_inspection_domain(reference)
     if reference.get("mass_total_kg") != vehicle.get("mass_total_kg"):
         raise ValueError("Reference mass disagrees with frozen vehicle")
     if reference.get("proxies") != geometry.get("proxies"):

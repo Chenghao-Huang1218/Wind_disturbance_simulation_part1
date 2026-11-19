@@ -2,20 +2,39 @@
 
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import mujoco
 import numpy as np
 import torch
 from numpy.typing import NDArray
 
-from .training.reference_aerodynamics import paired_wind_labels
+from .training.reference_aerodynamics import paired_wind_labels, reference_wind_limit
 from .training.dataset_v1 import file_sha256
 from .training.model_v1 import load_checkpoint, predict_increment
 from .training.sampling import body_to_world_rotation
 from .training.xml_parameters import load_reference_bundle
 
 FloatArray = NDArray[np.float64]
+X4_WIDE_WIND_CDA_M2 = 0.25
+
+
+def reference_horizontal_drag_area_m2(reference: dict[str, Any]) -> float:
+    """Compute the reference drag area at the stationary, level diagonal anchor.
+
+    Args:
+        reference: Validated wide reference with its frozen geometry and density.
+
+    Returns:
+        Along-wind force divided by dynamic pressure at [4, 4, 0] m/s.
+    """
+    wind = np.array([4.0, 4.0, 0.0])
+    speed = np.linalg.norm(wind)
+    force = paired_wind_labels(
+        [0, 0, 0], [1, 0, 0, 0], [0, 0, 0], wind, reference,
+    )["delta_force_world_n"]
+    density = reference["assumptions"]["density_kg_m3"]
+    return float((force @ (wind / speed)) / (0.5 * density * speed**2))
 
 
 class AnalyticalWindResidualModel:
@@ -34,6 +53,7 @@ class AnalyticalWindResidualModel:
         self.reference = load_reference_bundle(reference_path, xml_path)
         self.reference_sha256 = self.reference["reference_sha256"]
         self.mass_total_kg = float(self.reference["mass_total_kg"])
+        self.wind_max_horizontal_m_s = reference_wind_limit(self.reference)
         # Check individual masses, not cached body_subtreemass after mutation.
         vehicle_path = reference_path.parent / "vehicle_parameters.json"
         vehicle = json.loads(vehicle_path.read_text())
@@ -65,7 +85,7 @@ class AnalyticalWindResidualModel:
             velocity_world: Root O velocity in world coordinates, m/s.
             quaternion_wxyz: Unit body-to-world WXYZ quaternion.
             angular_velocity_body: Body angular rate, rad/s.
-            wind_world: World horizontal air velocity, resultant <=3 m/s.
+            wind_world: World horizontal air velocity within the reference domain.
 
         Returns:
             Complete raw same-state delta force divided by total mass.
@@ -88,10 +108,10 @@ class AnalyticalWindResidualModel:
 
 
 class X4PinnWindResidualModel:
-    """Validated CPU pilot wrapper; no legacy RPM inputs or extra forces.
+    """Validated CPU surrogate adapter for versioned X4 models.
 
     Args:
-        checkpoint_path: Explicit, separately preserved X4 v1 candidate.
+        checkpoint_path: The six-dimensional X4 candidate.
         reference_path: Frozen reference bundle used for the candidate labels.
         xml_path: Actual scene used by the app.
         model: Compiled runtime model, checked without modifying its state.
@@ -105,6 +125,9 @@ class X4PinnWindResidualModel:
         # the analytic runtime. No reference force is added during inference.
         validated = AnalyticalWindResidualModel(reference_path, xml_path, model)
         self.network, metadata = load_checkpoint(checkpoint_path)
+        self.wind_max_horizontal_m_s = self.network.wind_max_horizontal_m_s
+        if self.wind_max_horizontal_m_s != validated.wind_max_horizontal_m_s:
+            raise ValueError("X4 checkpoint wind limit differs from runtime reference")
         vehicle = json.loads(
             (reference_path.parent / "vehicle_parameters.json").read_text())
         expected = {
@@ -116,7 +139,8 @@ class X4PinnWindResidualModel:
             "coordinates_units": (
                 "B FLU at root O; W ENU-like; WXYZ B→W; m/s, rad/s, m/s²"),
             "wind_domain": (
-                "horizontal resultant 0–3 m/s; fixed initial arm geometry"),
+                f"horizontal resultant 0–{self.wind_max_horizontal_m_s:g} m/s; "
+                "fixed initial arm geometry"),
         }
         for field, value in expected.items():
             if metadata.get(field) != value:
@@ -127,6 +151,7 @@ class X4PinnWindResidualModel:
                     or any(character not in "0123456789abcdef" for character in digest)):
                 raise ValueError(f"X4 checkpoint has invalid {field}")
         self.reference_sha256 = validated.reference_sha256
+        self.reference = validated.reference
         self.mass_total_kg = validated.mass_total_kg
         self.checkpoint_sha256 = file_sha256(checkpoint_path)
         self.dataset_manifest_sha256 = metadata["dataset_manifest_sha256"]
@@ -149,7 +174,7 @@ class X4PinnWindResidualModel:
             velocity_world: Root O velocity [3], m/s.
             quaternion_wxyz: Unit B→W WXYZ [4].
             angular_velocity_body: Current body angular rate [3], rad/s.
-            wind_world: World horizontal wind [3], resultant <=3 m/s.
+            wind_world: World horizontal wind [3] within the checkpoint domain.
 
         Returns:
             Raw three-axis acceleration difference [3], m/s². Zero wind is

@@ -37,6 +37,7 @@ def create_figure(report: dict[str, Any]) -> Figure:
     })
     grid = [row for row in report["rest_wind_grid"]
             if row["state"] == "rest_identity"]
+    wind_limit = max(row["wind_speed_m_s"] for row in grid)
     figure, axes = plt.subplots(1, 2, figsize=(7.2, 3.0), dpi=100,
                                 constrained_layout=True)
     for direction, color, marker, style in zip(
@@ -51,20 +52,20 @@ def create_figure(report: dict[str, Any]) -> Figure:
         axes[0].plot(speed, acceleration, color=color, marker=marker,
                      linestyle=style, markersize=3, linewidth=1.2,
                      label=f"{direction}°")
-    rows = [row for row in grid if row["wind_speed_m_s"] == 3]
+    rows = [row for row in grid if row["wind_speed_m_s"] == wind_limit]
     directions = [row["wind_direction_deg"] for row in rows]
     response = [np.linalg.norm(row["increment_world_m_s2"]) for row in rows]
     axes[1].plot(directions + [360], response + [response[0]],
                  color="#0072B2", marker="o", markersize=3, linewidth=1.2)
     axes[0].set(xlabel="Horizontal wind speed (m/s)",
-                title="(a) Fixed wind directions", xlim=(0, 3))
+                title="(a) Fixed wind directions", xlim=(0, wind_limit))
     axes[1].set(xlabel="Wind direction in world XY (deg)",
-                title="(b) Direction scan at 3 m/s", xlim=(0, 360))
+                title=f"(b) Direction scan at {wind_limit:g} m/s", xlim=(0, 360))
     axes[0].legend(title="Wind direction", frameon=False, loc="upper left")
     axes[1].set_xticks([0, 90, 180, 270, 360])
     for axis in axes:
         axis.set_ylabel("Horizontal increment norm (m/s²)")
-        axis.set_ylim(0, 0.145)
+        axis.set_ylim(0, 1.12 * max(response))
         axis.grid(alpha=0.18, linewidth=0.5)
     return figure
 
@@ -82,9 +83,10 @@ def main() -> int:
     report = json.loads(args.report.read_text())
     figure = create_figure(report)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    wind_limit = report.get("wind_max_horizontal_m_s", 3.0)
+    name = "x4-950-reference-v1" if wind_limit == 3 else f"x4-950-reference-{wind_limit:g}mps"
     for extension in ("png", "pdf", "svg"):
-        figure.savefig(args.output_dir / f"x4-950-reference-v1.{extension}",
-                       dpi=300)
+        figure.savefig(args.output_dir / f"{name}.{extension}", dpi=300)
     plt.close(figure)
     print(f"Reference behavior figure: {args.output_dir.resolve()}")
     return 0

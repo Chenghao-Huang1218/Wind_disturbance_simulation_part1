@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from wind_field_simulation.training.reference_aerodynamics import (  # noqa: E402
     paired_wind_labels,
+    reference_wind_limit,
     reference_wrench_body,
 )
 from wind_field_simulation.training.xml_parameters import (  # noqa: E402
@@ -52,12 +53,13 @@ def inspect_reference(
         JSON-compatible behavior, source and timing metrics; no training data.
     """
     rng = np.random.default_rng(42)
+    wind_limit = reference_wind_limit(reference)
     angle = rng.uniform(-np.pi, np.pi, samples)
     speed = 3 * np.sqrt(rng.uniform(0, 1, samples))
     velocity = np.column_stack((speed * np.cos(angle), speed * np.sin(angle),
                                 rng.uniform(-1, 1, samples)))
     wind_angle = rng.uniform(-np.pi, np.pi, samples)
-    wind_speed = 3 * np.sqrt(rng.uniform(0, 1, samples))
+    wind_speed = wind_limit * np.sqrt(rng.uniform(0, 1, samples))
     wind = np.column_stack((
         wind_speed * np.cos(wind_angle), wind_speed * np.sin(wind_angle),
         np.zeros(samples),
@@ -71,7 +73,7 @@ def inspect_reference(
     paired = paired_wind_labels(velocity, quaternion, omega, wind, reference)
     zero = paired_wind_labels(velocity, quaternion, omega, np.zeros(3), reference)
     # Test the complete wrench with air-relative translational velocity in B.
-    air_body = rng.uniform(-6, 6, (samples, 3))
+    air_body = rng.uniform(-wind_limit - 3, wind_limit + 3, (samples, 3))
     force, moment = reference_wrench_body(air_body, omega, reference)
     power = np.sum(force * air_body + moment * omega, axis=-1)
     label = paired["wind_increment_acceleration_world_m_s2"]
@@ -81,7 +83,7 @@ def inspect_reference(
             or np.any(zero["wind_increment_acceleration_world_m_s2"] != 0)):
         raise ValueError("Reference physical property check failed")
     grid = []
-    for magnitude in np.linspace(0, 3, 7):
+    for magnitude in np.linspace(0, wind_limit, 7):
         for degrees in range(0, 360, 15):
             theta = np.deg2rad(degrees)
             current_wind = magnitude * np.array([
@@ -99,10 +101,10 @@ def inspect_reference(
                 "increment_world_m_s2": increment.tolist(),
             })
     opposing = paired_wind_labels(
-        [-3, 0, 0], [1, 0, 0, 0], [0, 0, 0], [3, 0, 0], reference,
+        [-3, 0, 0], [1, 0, 0, 0], [0, 0, 0], [wind_limit, 0, 0], reference,
     )
     grid.append({
-        "wind_speed_m_s": 3, "wind_direction_deg": 0,
+        "wind_speed_m_s": wind_limit, "wind_direction_deg": 0,
         "state": "root_velocity_minus3x",
         "force_world_n": opposing["force_wind_world_n"].tolist(),
         "increment_world_m_s2": opposing[
@@ -130,6 +132,7 @@ def inspect_reference(
         "kind": "offline_reference_inspection_v1", "seed": 42,
         "state_samples": samples,
         "reference_sha256": reference["reference_sha256"],
+        "wind_max_horizontal_m_s": wind_limit,
         "environment": {
             "python": sys.version.split()[0], "numpy": np.__version__,
             "platform": platform.platform(), "processor": platform.processor(),

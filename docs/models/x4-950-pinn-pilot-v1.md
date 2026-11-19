@@ -2,9 +2,8 @@
 
 ## Intended use and interface
 
-Default `pinn-x4` wind-increment backend in this project's MuJoCo/PX4 SITL,
-selected after user approval following the24-run comparison. Legacy `pinn`
-and `analytic` remain explicit fallbacks.
+The 0–3 m/s `pinn-x4` pilot was selected after the 24-run comparison and is
+available explicitly. Ordinary startup uses the [0–10 m/s v2 model](x4-950-pinn-wind-10-v2.md).
 No checkpoint is installed over the old model. No PX4 code or control-parameter
 changes are required. Invalid candidate metadata is rejected before connecting.
 Fallback means explicitly selecting `--wind-backend pinn`, not silent swapping.
@@ -69,13 +68,11 @@ hidden-parameter sensitivity, GPU consistency or measured-aircraft validation.
 
 ```bash
 python scripts/run_simulation.py --wind-backend pinn-x4 \
-  --reference-config outputs/pinn/x4_950_wind_v1/reference_config.json \
-  --pinn-checkpoint outputs/pinn/x4_950_pilot_v1/training_corrected/candidate.pt
+  --reference-config src/wind_field_simulation/assets/checkpoints/x4_950_wind_v1/reference_config.json \
+  --pinn-checkpoint src/wind_field_simulation/assets/checkpoints/x4_950_wind_v1/candidate.pt
 ```
 
-The above explicit original-artifact selection still works. Ordinary default
-startup is `python scripts/run_simulation.py`, using bundled paths independent
-of the current working directory. Explicit fallbacks need only
+The explicit selection uses the bundled v1 pair. For other fallbacks, use
 `--wind-backend analytic` or `--wind-backend pinn`; the latter loads no new
 checkpoint/reference. Overrides remain available, with no silent fallback.
 

@@ -14,6 +14,67 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 FloatArray = NDArray[np.float64]
+LEGACY_WIND_MAX_M_S = 3.0
+WIDE_WIND_MAX_M_S = 10.0
+INSPECTION_STATE_DOMAIN = {
+    "root_horizontal_speed_max_m_s": 3.0,
+    "root_vertical_velocity_m_s": [-1.0, 1.0],
+    "roll_pitch_max_deg": 20.0,
+    "yaw_deg": [-180.0, 180.0],
+    "angular_speed_max_rad_s": 1.5,
+}
+
+
+def reference_wind_limit(reference: dict[str, Any]) -> float:
+    """Read the supported horizontal magnitude from reference assumptions.
+
+    Args:
+        reference: Frozen reference with wind-domain assumptions.
+
+    Returns:
+        Maximum horizontal wind magnitude in m/s.
+
+    Raises:
+        ValueError: Unsupported or incomplete wind-domain metadata.
+    """
+    if not isinstance(reference, dict):
+        raise ValueError("Reference config must be a JSON object")
+    assumptions = reference.get("assumptions")
+    if not isinstance(assumptions, dict):
+        raise ValueError("Missing reference wind assumptions")
+    maximum = assumptions.get("wind_max_horizontal_m_s")
+    if (type(maximum) not in (int, float)
+            or maximum not in (LEGACY_WIND_MAX_M_S, WIDE_WIND_MAX_M_S)):
+        raise ValueError("Unsupported reference wind_max_horizontal_m_s")
+    default_z = 0.0 if maximum == LEGACY_WIND_MAX_M_S else None
+    for field in ("wind_z_m_s", "applied_force_z_n"):
+        value = assumptions.get(field, default_z)
+        if type(value) not in (int, float) or value != 0:
+            raise ValueError(f"Reference {field} must be zero")
+    return float(maximum)
+
+
+def validate_wide_inspection_domain(reference: dict[str, Any]) -> None:
+    """Check the recorded state envelope of a wide reference at startup.
+
+    Args:
+        reference: Wide artifact with a structured inspection state domain.
+
+    Raises:
+        ValueError: The envelope differs from the supported training protocol.
+    """
+    domain = reference.get("inspection_state_domain")
+    if not isinstance(domain, dict):
+        raise ValueError("Missing wide reference inspection_state_domain")
+    for field, expected in INSPECTION_STATE_DOMAIN.items():
+        value = domain.get(field)
+        if isinstance(expected, list):
+            valid = (isinstance(value, list) and value == expected
+                     and all(type(bound) in (int, float) for bound in value))
+        else:
+            valid = type(value) in (int, float) and value == expected
+        if not valid:
+            raise ValueError(f"Unsupported wide reference inspection_state_domain.{field}")
 
 
 def _vectors(value: ArrayLike, length: int, name: str) -> FloatArray:
@@ -142,7 +203,8 @@ def paired_wind_labels(
         quaternion_wxyz: Unit quaternion, B to W, shape (...,4).
         angular_velocity_body: Angular velocity in B, rad/s, shape (...,3).
         wind_world: Air velocity in W, m/s, shape (...,3); w_z=0 and
-            horizontal magnitude <=3 m/s. Other state arrays may broadcast.
+            horizontal magnitude within the reference domain. Other arrays
+            may broadcast.
         reference: Frozen geometry and assumptions; total assembly mass kg.
 
     Returns:
@@ -161,11 +223,11 @@ def paired_wind_labels(
     mass = float(reference["mass_total_kg"])
     if not np.isfinite(mass) or mass <= 0:
         raise ValueError("Total assembly mass must be finite and positive")
-    # The v1 domain is fixed by the user, independent of configurable Cd/rho.
+    wind_limit = reference_wind_limit(reference)
     wind_speed = np.hypot(wind[..., 0], wind[..., 1])
     if (np.any(wind[..., 2] != 0)
-            or np.any(wind_speed > np.nextafter(3.0, np.inf))):
-        raise ValueError("Require horizontal wind with resultant speed <=3 m/s")
+            or np.any(wind_speed > np.nextafter(wind_limit, np.inf))):
+        raise ValueError(f"Require horizontal wind with resultant speed <={wind_limit:g} m/s")
     shape = np.broadcast_shapes(
         velocity.shape[:-1], quaternion.shape[:-1],
         omega.shape[:-1], wind.shape[:-1],

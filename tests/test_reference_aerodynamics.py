@@ -153,12 +153,19 @@ def test_rejects_nonfinite_state_or_wrong_shape() -> None:
             reference_wrench_body(velocity, np.zeros(3), one_proxy())
 
 
-def test_inspection_cli_checks_real_reference_and_emits_metrics(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wind_limit", [3, 10])
+def test_inspection_cli_checks_real_reference_and_emits_metrics(
+    tmp_path: Path, wind_limit: int,
+) -> None:
     from wind_field_simulation.training.xml_parameters import (
         DEFAULT_ASSUMPTIONS, DEFAULT_SCENE, export_reference_bundle,
     )
 
-    export_reference_bundle(DEFAULT_SCENE, DEFAULT_ASSUMPTIONS, tmp_path)
+    assumptions = json.loads(DEFAULT_ASSUMPTIONS.read_text())
+    assumptions["assumptions"]["wind_max_horizontal_m_s"] = wind_limit
+    assumptions_path = tmp_path / "assumptions.json"
+    assumptions_path.write_text(json.dumps(assumptions))
+    export_reference_bundle(DEFAULT_SCENE, assumptions_path, tmp_path)
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run([
         sys.executable, str(root / "scripts/check_x4_950_reference.py"),
@@ -174,6 +181,7 @@ def test_inspection_cli_checks_real_reference_and_emits_metrics(tmp_path: Path) 
     assert report["label_z_max_abs_m_s2"] == 0
     assert report["scalar_pair_timing_us"]["median"] > 0
     assert len(report["rest_wind_grid"]) == 169  # 7 x 24 + opposing-wind case.
+    assert max(row["wind_speed_m_s"] for row in report["rest_wind_grid"]) == wind_limit
     # A modified frozen artifact must be rejected before checking or timing it.
     config_path = tmp_path / "reference_config.json"
     reference = json.loads(config_path.read_text())

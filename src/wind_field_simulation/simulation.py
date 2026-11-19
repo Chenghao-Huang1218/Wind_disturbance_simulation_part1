@@ -21,6 +21,7 @@ import argparse
 import enum
 import faulthandler
 import hashlib
+import json
 import os
 import queue
 import sys
@@ -48,7 +49,17 @@ from matplotlib.widgets import Button, TextBox
 
 from .sitl_process import request_managed_sitl_shutdown
 from .run_logging import WindRunLogger
-from .wind_backends import AnalyticalWindResidualModel, X4PinnWindResidualModel
+from .training.reference_aerodynamics import (
+    INSPECTION_STATE_DOMAIN,
+    LEGACY_WIND_MAX_M_S,
+    reference_wind_limit,
+)
+from .wind_backends import (
+    X4_WIDE_WIND_CDA_M2,
+    AnalyticalWindResidualModel,
+    X4PinnWindResidualModel,
+    reference_horizontal_drag_area_m2,
+)
 
 
 FloatArray = npt.NDArray[np.float64]
@@ -75,6 +86,8 @@ WIND_ARROW_LENGTH_M = 0.28
 WIND_ARROW_HEAD_LENGTH_M = 0.035
 WIND_ARROW_FLOW_PERIOD_M = 2.5
 TRAJECTORY_PLOT_UPDATE_PERIOD_S = 0.25
+TRAJECTORY_PLOT_SETTLING_TIME_S = 3.0
+TRAJECTORY_PLOT_MIN_PADDING_M = 0.25
 TRAJECTORY_PLOT_TARGET_SAMPLE_COUNT = 240
 BAROMETER_RANDOM_SEED = 0
 BAROMETER_NOISE_STD_HPA = 0.01  # 1 Pa, approximately 8 cm at sea level.
@@ -96,12 +109,12 @@ def default_pinn_checkpoint_dir() -> Path:
 
 
 def default_x4_pinn_checkpoint() -> Path:
-    """Return the separately bundled, verified X4 v1 pilot checkpoint."""
-    return default_pinn_checkpoint_dir() / "x4_950_wind_v1" / "candidate.pt"
+    """Return the bundled X4 v2 checkpoint for 0–10 m/s horizontal wind."""
+    return default_pinn_checkpoint_dir() / "x4_950_wind_10_v2" / "candidate.pt"
 
 
 def default_wind_reference_config() -> Path:
-    """Return the frozen bundle shared by default X4 PINN and analytic fallback."""
+    """Return the 0–3 m/s reference for the explicit analytic backend."""
     return default_pinn_checkpoint_dir() / "x4_950_wind_v1" / "reference_config.json"
 
 
@@ -160,11 +173,14 @@ def _validated_vector3(values: Sequence[float], name: str) -> FloatArray:
     return vector.copy()
 
 
-def _validated_wind_velocity(values: Sequence[float | str]) -> FloatArray:
-    """Validate horizontal wind with resultant speed at most 3 m/s.
+def _validated_wind_velocity(
+    values: Sequence[float | str], wind_max_horizontal_m_s: float = LEGACY_WIND_MAX_M_S,
+) -> FloatArray:
+    """Validate horizontal wind against the selected backend's domain.
 
     Args:
         values: World-frame [X, Y, 0] wind velocity in m/s.
+        wind_max_horizontal_m_s: Maximum resultant speed in m/s.
 
     Returns:
         An owned float64 velocity vector safe for downstream float32 scaling.
@@ -183,8 +199,8 @@ def _validated_wind_velocity(values: Sequence[float | str]) -> FloatArray:
     ))
     if scaled_speed > 1.0:
         raise ValueError("Wind exceeds PINN numeric range.")
-    if np.hypot(velocity[0], velocity[1]) > np.nextafter(3.0, np.inf):
-        raise ValueError("Horizontal wind resultant must be <=3 m/s.")
+    if np.hypot(velocity[0], velocity[1]) > np.nextafter(wind_max_horizontal_m_s, np.inf):
+        raise ValueError(f"Horizontal wind resultant must be <={wind_max_horizontal_m_s:g} m/s.")
     return velocity
 
 
@@ -752,6 +768,8 @@ class Px4Bridge:
         command_udp_port: int = 14580,
         connection_factory: Callable[..., Any] | None = None,
         clock: Callable[[], float] = time.perf_counter,
+        *,
+        command_target_system: int = 1,
     ) -> None:
         """Initializes PX4 endpoints and conversion parameters.
 
@@ -761,6 +779,7 @@ class Px4Bridge:
             command_udp_port: PX4 Offboard MAVLink UDP port.
             connection_factory: Injectable pymavlink connection constructor.
             clock: Injectable monotonic wall clock.
+            command_target_system: MAVLink system ID of the selected PX4 instance.
         """
         scales = np.asarray(rotor_thrust_scales, dtype=np.float64)
         if scales.shape != (4,) or not np.all(np.isfinite(scales)):
@@ -778,7 +797,7 @@ class Px4Bridge:
         self._clock = clock
         self.sim_link: Any | None = None
         self.command_link: Any | None = None
-        self.command_target_system = 1
+        self.command_target_system = command_target_system
         self.command_target_component = 1
         self.local_origin_world: FloatArray | None = None
         self.last_rotor_thrusts = np.zeros(4, dtype=np.float64)
@@ -1320,13 +1339,15 @@ class ConstantWindField:
     """Spatially and temporally constant horizontal world-frame airflow."""
 
     configured_velocity_world: FloatArray
+    wind_max_horizontal_m_s: float = LEGACY_WIND_MAX_M_S
 
     def __post_init__(self) -> None:
         """Validates and copies the configured velocity."""
         object.__setattr__(
             self,
             "configured_velocity_world",
-            _validated_wind_velocity(self.configured_velocity_world),
+            _validated_wind_velocity(self.configured_velocity_world,
+                                     self.wind_max_horizontal_m_s),
         )
 
     def velocity(self, enabled: bool) -> FloatArray:
@@ -1439,8 +1460,12 @@ class PredefinedXYTrajectory:
         if elapsed >= self.duration:
             return None
         phase = float(np.clip(elapsed / self.duration, 0.0, 1.0))
+        return TrajectorySample(position_world=self._position_at_phase(phase), phase=phase)
+
+    def _position_at_phase(self, phase: float) -> FloatArray:
+        """Return the world XYZ target at a normalized phase."""
         offset = self._offset_at_phase(phase)
-        position = np.array(
+        return np.array(
             [
                 self.center_xy[0] + offset[0],
                 self.center_xy[1] + offset[1],
@@ -1448,7 +1473,6 @@ class PredefinedXYTrajectory:
             ],
             dtype=np.float64,
         )
-        return TrajectorySample(position_world=position, phase=phase)
 
     def _offset_at_phase(self, phase: float) -> FloatArray:
         """Returns the horizontal path offset at normalized ``phase``."""
@@ -1511,6 +1535,7 @@ class RealtimePredefinedTrajectoryPlot:
     actual_line: Line2D
     actual_xy: list[FloatArray] = field(default_factory=list)
     last_update_sim_time: float = -np.inf
+    settle_until_sim_time: float | None = None
 
     def close(self) -> None:
         """Closes the realtime trajectory figure."""
@@ -1585,14 +1610,16 @@ def create_realtime_predefined_trajectory_plot(
     axis.set_aspect("equal", adjustable="box")
     x_span = float(np.ptp(target_xy[:, 0]))
     y_span = float(np.ptp(target_xy[:, 1]))
-    padding = max(0.25, 0.15 * max(x_span, y_span))
+    padding = max(TRAJECTORY_PLOT_MIN_PADDING_M, 0.15 * max(x_span, y_span))
     axis.set_xlim(
         float(np.min(target_xy[:, 0]) - padding),
         float(np.max(target_xy[:, 0]) + padding),
+        auto=True,
     )
     axis.set_ylim(
         float(np.min(target_xy[:, 1]) - padding),
         float(np.max(target_xy[:, 1]) + padding),
+        auto=True,
     )
     figure.tight_layout()
     return RealtimePredefinedTrajectoryPlot(
@@ -1609,10 +1636,34 @@ def show_realtime_figure(figure: Figure) -> None:
     figure.canvas.flush_events()
 
 
+def _expand_trajectory_axes(axis: Axes, actual_xy: FloatArray) -> None:
+    """Keep departures visible on each axis with automatic limits enabled."""
+    limits = (
+        (axis.get_autoscalex_on(), axis.get_xlim, axis.set_xlim),
+        (axis.get_autoscaley_on(), axis.get_ylim, axis.set_ylim),
+    )
+    for positions, (enabled, get_limits, set_limits) in zip(
+        actual_xy.T, limits, strict=True,
+    ):
+        if not enabled:
+            continue
+        lower, upper = get_limits()
+        data_lower, data_upper = float(positions.min()), float(positions.max())
+        if data_lower < lower or data_upper > upper:
+            padding = TRAJECTORY_PLOT_MIN_PADDING_M
+            set_limits(
+                min(lower, data_lower - padding),
+                max(upper, data_upper + padding),
+                auto=True,
+            )
+
+
 def update_realtime_predefined_trajectory_plot(
     plot: RealtimePredefinedTrajectoryPlot,
     position_world: Sequence[float],
     sim_time: float,
+    *,
+    force_redraw: bool = False,
 ) -> None:
     """Appends actual XY position and periodically redraws the plot.
 
@@ -1620,6 +1671,7 @@ def update_realtime_predefined_trajectory_plot(
         plot: Realtime plot state to update.
         position_world: Current world-frame UAV XYZ position.
         sim_time: Current MuJoCo simulation time in seconds.
+        force_redraw: Draw immediately when capturing the final sample.
 
     Raises:
         ValueError: If ``sim_time`` is non-finite.
@@ -1631,12 +1683,13 @@ def update_realtime_predefined_trajectory_plot(
         return
     plot.actual_xy.append(position[:2].copy())
     if (
-        float(sim_time) - plot.last_update_sim_time
+        not force_redraw and float(sim_time) - plot.last_update_sim_time
         < TRAJECTORY_PLOT_UPDATE_PERIOD_S
     ):
         return
     actual_array = np.asarray(plot.actual_xy, dtype=np.float64)
     plot.actual_line.set_data(actual_array[:, 0], actual_array[:, 1])
+    _expand_trajectory_axes(plot.axis, actual_array)
     plot.last_update_sim_time = float(sim_time)
     plot.figure.canvas.draw_idle()
     plot.figure.canvas.flush_events()
@@ -1889,14 +1942,18 @@ class ControlPanel:
         self,
         command_queue: queue.SimpleQueue[UiCommand],
         initial_wind_world: Sequence[float] | None = None,
+        *,
+        wind_max_horizontal_m_s: float = LEGACY_WIND_MAX_M_S,
     ) -> None:
         """Build controls whose callbacks enqueue typed commands.
 
         Args:
             command_queue: Commands consumed by the simulation loop.
             initial_wind_world: Optional [X, Y, 0] draft; Apply is required.
+            wind_max_horizontal_m_s: Maximum resultant speed for Apply.
         """
         self.command_queue = command_queue
+        self.wind_max_horizontal_m_s = wind_max_horizontal_m_s
         self.figure = plt.figure(figsize=(7.4, 5.0), facecolor="#f5f5f5")
         self.figure.canvas.manager.set_window_title("PX4 Wind Simulation Control")
         self.figure.suptitle(
@@ -2051,7 +2108,7 @@ class ControlPanel:
             initial_wind_world: Optional draft, not accepted wind settings.
         """
         draft = (
-            _validated_wind_velocity(initial_wind_world)
+            _validated_wind_velocity(initial_wind_world, self.wind_max_horizontal_m_s)
             if initial_wind_world is not None else None
         )
         self._displayed_wind_world: FloatArray | None = None
@@ -2062,7 +2119,9 @@ class ControlPanel:
         self.buttons["wind"].set_active(False)
         self.buttons["wind"].label.set_alpha(0.4)
         self.figure.text(
-            0.52, 0.235, "Horizontal wind (world, <=3 m/s)", fontsize=9,
+            0.52, 0.235,
+            f"Horizontal wind (world, <={self.wind_max_horizontal_m_s:g} m/s)",
+            fontsize=9,
         )
         self.wind_feedback_text = self.figure.text(
             0.52, 0.023, "", fontsize=8, va="bottom", color="#1f2937",
@@ -2093,6 +2152,7 @@ class ControlPanel:
         try:
             velocity = _validated_wind_velocity(
                 [box.text.strip() for box in self.wind_inputs] + [0.0],
+                self.wind_max_horizontal_m_s,
             )
         except ValueError as error:
             self._wind_input_error = str(error)
@@ -2418,23 +2478,33 @@ class SimulationConfig:
     reference_config: Path | None = None
     run_log: Path | None = None
     pinn_checkpoint: Path | None = None
+    target_system: int = 1
+    circle_duration_s: float | None = None
 
     def __post_init__(self) -> None:
         """Validates numeric and path configuration."""
         if self.wind_backend not in ("pinn", "analytic", "pinn-x4"):
             raise ValueError("wind_backend must be pinn, analytic or pinn-x4")
-        if self.wind_backend in ("analytic", "pinn-x4") and self.reference_config is None:
+        if self.wind_backend == "analytic" and self.reference_config is None:
             object.__setattr__(self, "reference_config", default_wind_reference_config())
         if self.wind_backend == "pinn" and self.reference_config is not None:
             raise ValueError("--reference-config requires analytic or pinn-x4 backend")
         if self.wind_backend == "pinn-x4" and self.pinn_checkpoint is None:
             object.__setattr__(self, "pinn_checkpoint", default_x4_pinn_checkpoint())
+        if self.wind_backend == "pinn-x4" and self.reference_config is None:
+            reference = default_x4_pinn_checkpoint().with_name("reference_config.json")
+            object.__setattr__(self, "reference_config", reference)
         if self.wind_backend != "pinn-x4" and self.pinn_checkpoint is not None:
             raise ValueError("--pinn-checkpoint requires pinn-x4 backend")
         if self.wind_velocity_world is not None:
+            wind_limit = LEGACY_WIND_MAX_M_S
+            if self.reference_config is not None:
+                # Only preview the domain here. The production adapter
+                # verifies the full bundle and checkpoint before enabling it.
+                wind_limit = reference_wind_limit(json.loads(self.reference_config.read_text()))
             object.__setattr__(
                 self, "wind_velocity_world",
-                _validated_wind_velocity(self.wind_velocity_world),
+                _validated_wind_velocity(self.wind_velocity_world, wind_limit),
             )
         positive_values = np.array(
             [
@@ -2442,6 +2512,7 @@ class SimulationConfig:
                 self.trajectory_size_m,
                 self.trajectory_duration_s,
                 self.figure8_duration_s,
+                self.trajectory_duration_for("circle"),
             ],
             dtype=np.float64,
         )
@@ -2455,6 +2526,23 @@ class SimulationConfig:
         ):
             if not 1 <= int(port) <= 65_535:
                 raise ValueError(f"{port_name} must be in [1, 65535]")
+        if not 1 <= self.target_system <= 255:
+            raise ValueError("--target-system must be in [1, 255]")
+
+    def trajectory_duration_for(self, name: str) -> float:
+        """Return the configured duration for a predefined trajectory.
+
+        Args:
+            name: Predefined trajectory name.
+
+        Returns:
+            Duration in simulation seconds.
+        """
+        if name == "figure8":
+            return self.figure8_duration_s
+        if name == "circle" and self.circle_duration_s is not None:
+            return self.circle_duration_s
+        return self.trajectory_duration_s
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -2466,10 +2554,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--params-path", type=Path, default=default_params_path())
     parser.add_argument("--sim-tcp-port", type=int, default=4560)
     parser.add_argument("--command-udp-port", type=int, default=14580)
+    parser.add_argument(
+        "--target-system", type=int, default=1,
+        help="PX4 MAVLink system ID (default: 1; stock SITL instance N uses N+1).",
+    )
     parser.add_argument("--takeoff-height", type=float, default=1.0)
     parser.add_argument(
         "--wind-backend", choices=("pinn", "analytic", "pinn-x4"), default="pinn-x4",
-        help="Default: bundled pinn-x4. Explicit fallbacks: analytic or legacy pinn.",
+        help="Default: bundled 0–10 m/s pinn-x4. Explicit fallbacks: analytic or legacy pinn.",
     )
     parser.add_argument(
         "--reference-config", type=Path,
@@ -2477,7 +2569,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--pinn-checkpoint", type=Path,
-        help="Override the bundled X4 v1 candidate.pt (pinn-x4 backend only).",
+        help="Select an X4 checkpoint matching the reference (pinn-x4 only).",
     )
     parser.add_argument(
         "--run-log", type=Path,
@@ -2486,10 +2578,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     for axis in ("x", "y"):
         parser.add_argument(
             f"--wind-{axis}", type=float, default=None,
-            help="Prefill a world-frame wind draft in m/s; Apply Wind is required.",
+            help="Prefill a world-frame wind draft within the selected domain; Apply Wind is required.",
         )
     parser.add_argument("--trajectory-size", type=float, default=1.0)
-    parser.add_argument("--trajectory-duration", type=float, default=20.0)
+    parser.add_argument(
+        "--trajectory-duration",
+        type=float,
+        help="Circle, ellipse, and square duration in simulation seconds "
+        "(defaults: circle 10; ellipse and square 20).",
+    )
     parser.add_argument("--figure8-duration", type=float, default=30.0)
     parser.add_argument(
         "--no-viewer",
@@ -2502,6 +2599,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
     """Parses command-line arguments into a validated configuration."""
     args = build_argument_parser().parse_args(argv)
+    trajectory_duration = args.trajectory_duration
     components = [args.wind_x, args.wind_y]
     wind_draft = (
         None if all(value is None for value in components)
@@ -2518,7 +2616,10 @@ def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
         takeoff_height_m=args.takeoff_height,
         wind_velocity_world=wind_draft,
         trajectory_size_m=args.trajectory_size,
-        trajectory_duration_s=args.trajectory_duration,
+        trajectory_duration_s=(
+            20.0 if trajectory_duration is None else trajectory_duration
+        ),
+        circle_duration_s=10.0 if trajectory_duration is None else None,
         figure8_duration_s=args.figure8_duration,
         viewer_enabled=not args.no_viewer,
         wind_backend=args.wind_backend,
@@ -2527,6 +2628,7 @@ def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
         ),
         run_log=args.run_log.resolve() if args.run_log else None,
         pinn_checkpoint=(args.pinn_checkpoint.resolve() if args.pinn_checkpoint else None),
+        target_system=args.target_system,
     )
 
 
@@ -2694,6 +2796,22 @@ class WindSimulationApp:
                 self.model)
         else:
             self.pinn_predictor = PinnWindResidualModel()
+        self.wind_max_horizontal_m_s = getattr(
+            self.pinn_predictor, "wind_max_horizontal_m_s", LEGACY_WIND_MAX_M_S,
+        )
+        self.wind_cda_m2: float | None = None
+        self.wind_drag_scale = 1.0
+        bundled_wide_reference = default_x4_pinn_checkpoint().with_name(
+            "reference_config.json"
+        )
+        if pinn_predictor is None and config.reference_config == bundled_wide_reference:
+            self.wind_cda_m2 = X4_WIDE_WIND_CDA_M2
+            reference_area = reference_horizontal_drag_area_m2(
+                self.pinn_predictor.reference,
+            )
+            self.wind_drag_scale = self.wind_cda_m2 / reference_area
+        if config.wind_velocity_world is not None:
+            _validated_wind_velocity(config.wind_velocity_world, self.wind_max_horizontal_m_s)
         self.residual_filter = ResidualSafetyFilter()
         hover_thrust = read_px4_param(
             config.params_path,
@@ -2710,6 +2828,7 @@ class WindSimulationApp:
             sim_tcp_port=config.sim_tcp_port,
             command_udp_port=config.command_udp_port,
             clock=clock,
+            command_target_system=config.target_system,
         )
         if hasattr(self.bridge, "set_local_origin"):
             self.bridge.set_local_origin(initial_position)
@@ -2746,8 +2865,12 @@ class WindSimulationApp:
             )) if config.run_log is not None else None
         )
         print(f"Wind backend: {config.wind_backend}; "
-              "horizontal resultant <=3 m/s; XY EMA/limit unchanged.",
+              f"horizontal resultant <={self.wind_max_horizontal_m_s:g} m/s; "
+              "XY EMA/limit unchanged.",
               flush=True)
+        if self.wind_cda_m2 is not None:
+            print(f"Wind CdA: {self.wind_cda_m2:g} m² at [4, 4, 0] m/s; "
+                  f"XY gain: {self.wind_drag_scale:.4f}.", flush=True)
         if pinn_predictor is None and config.wind_backend in ("analytic", "pinn-x4"):
             print("Frozen reference: "
                   f"{self.pinn_predictor.reference_sha256}; "
@@ -2858,10 +2981,14 @@ class WindSimulationApp:
             "acceleration_limit_m_s2": (
                 self.residual_filter.acceleration_limit_m_s2
             ),
-            "wind_max_m_s": 3.0,
+            "wind_max_m_s": self.wind_max_horizontal_m_s,
+            "wind_cda_m2": self.wind_cda_m2,
+            "wind_drag_scale": self.wind_drag_scale,
+            "inspection_state_domain": INSPECTION_STATE_DOMAIN,
             "takeoff_height_m": self.config.takeoff_height_m,
             "trajectory_size_m": self.config.trajectory_size_m,
             "trajectory_duration_s": self.config.trajectory_duration_s,
+            "circle_duration_s": self.config.trajectory_duration_for("circle"),
             "figure8_duration_s": self.config.figure8_duration_s,
             "barometer_seed": BAROMETER_RANDOM_SEED,
             "joint_deviation_units": "joint1-6 rad; endleft/endright m",
@@ -2881,10 +3008,14 @@ class WindSimulationApp:
         rotation = rotation_buffer.reshape(3, 3)
         pitch = np.arcsin(np.clip(-rotation[2, 0], -1, 1))
         roll = np.arctan2(rotation[2, 1], rotation[2, 2])
+        domain = INSPECTION_STATE_DOMAIN
+        vz_min, vz_max = domain["root_vertical_velocity_m_s"]
+        max_tilt = np.deg2rad(domain["roll_pitch_max_deg"])
         outside = bool(
-            np.hypot(*velocity[:2]) > 3 or abs(velocity[2]) > 1
-            or abs(pitch) > np.deg2rad(20)
-            or abs(roll) > np.deg2rad(20) or np.linalg.norm(omega) > 1.5
+            np.hypot(*velocity[:2]) > domain["root_horizontal_speed_max_m_s"]
+            or not vz_min <= velocity[2] <= vz_max
+            or max(abs(pitch), abs(roll)) > max_tilt
+            or np.linalg.norm(omega) > domain["angular_speed_max_rad_s"]
         )
         return {
             "sim_time_s": float(self.data.time),
@@ -2904,6 +3035,7 @@ class WindSimulationApp:
             "raw_acceleration_world_m_s2": (
                 self.last_raw_residual_acceleration.tolist()
             ),
+            "prelimit_acceleration_world_m_s2": self.residual_filter.filtered.tolist(),
             "filtered_acceleration_world_m_s2": (
                 self.last_filtered_residual_acceleration.tolist()
             ),
@@ -3017,7 +3149,7 @@ class WindSimulationApp:
             return
         if command.command_type is UiCommandType.SET_WIND:
             try:
-                wind_field = ConstantWindField(command.payload)
+                wind_field = ConstantWindField(command.payload, self.wind_max_horizontal_m_s)
             except (TypeError, ValueError, OverflowError) as error:
                 print(f"Wind settings rejected: {error}", flush=True)
                 return
@@ -3054,17 +3186,18 @@ class WindSimulationApp:
                 ControlAction.SEND_LANDING_TARGET,
                 ControlAction.SEND_POSITION_TARGET,
             ):
+                if (
+                    action is ControlAction.SEND_POSITION_TARGET
+                    and self.trajectory_plot is not None
+                ):
+                    self.trajectory_plot.settle_until_sim_time = None
                 self.bridge.send_position_target(
                     self.flight_control.target_position_world,
                     self.TARGET_YAW_RAD,
                 )
             elif action is ControlAction.START_TRAJECTORY:
                 trajectory_name = self.flight_control.active_trajectory_name
-                duration = (
-                    self.config.figure8_duration_s
-                    if trajectory_name == "figure8"
-                    else self.config.trajectory_duration_s
-                )
+                duration = self.config.trajectory_duration_for(trajectory_name)
                 self.active_trajectory = PredefinedXYTrajectory.from_start(
                     name=trajectory_name,
                     start_xy=self.flight_control.target_position_world[:2],
@@ -3105,10 +3238,38 @@ class WindSimulationApp:
             return
         sample = self.active_trajectory.sample(float(self.data.time))
         if sample is None:
+            self.flight_control.target_position_world = (
+                self.active_trajectory._position_at_phase(1.0)
+            )
             self.active_trajectory = None
             self.flight_control.active_trajectory_name = "none"
+            if self.trajectory_plot is not None:
+                self.trajectory_plot.settle_until_sim_time = (
+                    float(self.data.time) + TRAJECTORY_PLOT_SETTLING_TIME_S
+                )
             return
         self.flight_control.target_position_world = sample.position_world.copy()
+
+    def _update_trajectory_plot(self, position_world: FloatArray) -> None:
+        """Record the flight path through the post-trajectory hover window."""
+        plot = self.trajectory_plot
+        if plot is None:
+            return
+        if self.flight_control.flight_state is not FlightState.FLYING:
+            plot.settle_until_sim_time = None
+            return
+        if self.active_trajectory is None and plot.settle_until_sim_time is None:
+            return
+        sim_time = float(self.data.time)
+        final_sample = (
+            plot.settle_until_sim_time is not None
+            and sim_time >= plot.settle_until_sim_time
+        )
+        update_realtime_predefined_trajectory_plot(
+            plot, position_world, sim_time, force_redraw=final_sample,
+        )
+        if final_sample:
+            plot.settle_until_sim_time = None
 
     def _apply_wind_force(
         self,
@@ -3144,6 +3305,7 @@ class WindSimulationApp:
             # original 3D prediction for diagnostics, but do not apply its Z
             # component. Clear previous vertical EMA state without resetting XY.
             horizontal_residual = raw_residual.copy()
+            horizontal_residual[:2] *= self.wind_drag_scale
             horizontal_residual[2] = 0.0
             self.residual_filter.filtered[2] = 0.0
             filtered_residual = self.residual_filter.update(horizontal_residual)
@@ -3270,12 +3432,7 @@ class WindSimulationApp:
         if self.exit_requested:
             return False
         self._update_trajectory_target()
-        if self.active_trajectory is not None and self.trajectory_plot is not None:
-            update_realtime_predefined_trajectory_plot(
-                self.trajectory_plot,
-                position_world=position,
-                sim_time=float(self.data.time),
-            )
+        self._update_trajectory_plot(position)
         if self.flight_control.flight_state in (
             FlightState.TAKEOFF,
             FlightState.FLYING,
@@ -3390,6 +3547,7 @@ class WindSimulationApp:
             self.panel = ControlPanel(
                 self.command_queue,
                 initial_wind_world=self.config.wind_velocity_world,
+                wind_max_horizontal_m_s=self.wind_max_horizontal_m_s,
             )
             plt.ion()
             self.panel.figure.show()
@@ -3436,7 +3594,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"xml={config.xml_path}, params={config.params_path}, "
             f"wind=unconfigured (Apply Wind required), draft={wind_draft}, "
             f"backend={config.wind_backend}, "
-            f"ports={config.sim_tcp_port}/{config.command_udp_port}",
+            f"ports={config.sim_tcp_port}/{config.command_udp_port}, "
+            f"target_system={config.target_system}",
             flush=True,
         )
         print(

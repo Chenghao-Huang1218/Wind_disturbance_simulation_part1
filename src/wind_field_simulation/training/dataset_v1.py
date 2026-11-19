@@ -61,7 +61,13 @@ def build_pilot_dataset(
     Returns:
         State, full force/moment pairs, full B acceleration and XY W increment.
     """
-    data = sample_pilot_states(seed, split_counts)
+    data = label_states(sample_pilot_states(seed, split_counts), reference)
+    check_split_leakage(data)
+    return data
+
+
+def label_states(data: dict[str, NDArray], reference: dict[str, Any]) -> dict[str, NDArray]:
+    """Attach full reference wrench pairs and unclipped increments to sampled states."""
     labels = paired_wind_labels(
         data["velocity_world"], data["quaternion_wxyz"], data["omega_body"],
         data["wind_world"], reference,
@@ -77,9 +83,8 @@ def build_pilot_dataset(
         np.stack((labels["force_wind_world_n"], labels["force_no_wind_world_n"]), axis=1),
     ) / reference["mass_total_kg"]
     data["delta_acceleration_world"] = data.pop("wind_increment_acceleration_world_m_s2")
-    check_split_leakage(data)
     if not all(np.isfinite(array).all() for array in data.values()):
-        raise ValueError("Nonfinite pilot data")
+        raise ValueError("Nonfinite labeled data")
     return data
 
 

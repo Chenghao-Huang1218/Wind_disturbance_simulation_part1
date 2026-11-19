@@ -27,7 +27,8 @@ DEFAULT_TRAINING = {
 
 def pair_loss(
     model: X4WindAeroV1, batch: dict[str, Tensor], full_scale: Tensor,
-    delta_scale: Tensor, positive_work_weight: float,
+    delta_scale: Tensor, positive_work_weight: float, *,
+    delta_weights: Tensor | None = None,
 ) -> Tensor:
     """Combine full acceleration, raw XY pair and omega=0 full-work losses.
 
@@ -37,6 +38,7 @@ def pair_loss(
         full_scale: Training-only full per-axis std with 0.05 floor, m/s².
         delta_scale: Independent training-only increment scale, m/s².
         positive_work_weight: Dimensionless soft constraint coefficient.
+        delta_weights: Optional fixed dimensionless multiplier for each pair.
 
     Returns:
         Scalar dimensionless loss. Positive work applies to complete forces,
@@ -49,7 +51,10 @@ def pair_loss(
     delta = torch.einsum("nij,nj->ni", batch["rotation"],
                          prediction[:, 0] - prediction[:, 1])
     full_loss = ((prediction - batch["full"]) / full_scale).square().mean()
-    delta_loss = ((delta[:, :2] - batch["delta"][:, :2]) / delta_scale[:2]).square().mean()
+    delta_error = ((delta[:, :2] - batch["delta"][:, :2]) / delta_scale[:2]).square()
+    if delta_weights is not None:
+        delta_error = delta_error * delta_weights[:, None]
+    delta_loss = delta_error.mean()
     zero_omega = torch.all(batch["omega"] == 0, dim=1)
     work_loss = prediction.new_zeros(())
     if torch.any(zero_omega):

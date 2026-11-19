@@ -119,7 +119,7 @@ def test_shared_application_wind_domain(wind: list[float]) -> None:
         simulation.ConstantWindField(wind)
     with pytest.raises(ValueError, match="3 m/s"):
         simulation.parse_config([
-            "--wind-x", str(wind[0]), "--wind-y", str(wind[1]),
+            "--wind-backend", "analytic", "--wind-x", str(wind[0]), "--wind-y", str(wind[1]),
         ])
 
 

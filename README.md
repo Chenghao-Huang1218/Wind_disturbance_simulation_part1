@@ -13,13 +13,13 @@ Single-UAV wind disturbance simulation in MuJoCo with PX4 SITL, a PINN aerodynam
 | Demo video (animated preview) | Circular trajectory tracking example |
 | --- | --- |
 | [<img src="docs/media/videos/wind-field-simulation-preview.gif" width="420" alt="Animated wind simulation preview; click for the full MP4">](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | <img src="docs/media/images/Motion%20tracking.png" width="420" alt="Example target and actual XY trajectories"> |
-| [Watch / download the full MP4 (approximately 86 seconds, 17.6 MB)](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | Dashed gray: target; red: actual trajectory |
+| [Watch / download the full MP4 (approximately 66 seconds, 20.6 MB)](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | Dashed gray: target; red: actual trajectory |
 
 
 ## Features
 
 - PX4 closed-loop flight with XYZ targets and Figure-8, Ellipse, Circle and Square trajectories.
-- Adjustable, uniform horizontal wind from 0 to 3 m/s.
+- Adjustable, uniform horizontal wind from 0 to 10 m/s with the default backend.
 - A pretrained X4-950 PINN converts wind into additional aerodynamic forces.
 - MuJoCo visualization, a control panel and trajectory comparison plots.
 
@@ -99,7 +99,7 @@ The supplied checkpoint and PX4 binary are ready to use; normal operation requir
 ## Control panel
 
 1. Wait for **PX4: connected**. Click **Unlock**, wait for **armed**, then click **Takeoff**.
-2. Use **X± / Y± / Z±** for 0.5 m world-frame target increments, or select a trajectory.
+2. Use **X± / Y± / Z±** for 0.5 m world-frame target increments, or select a trajectory. Circle defaults to a 1 m diameter and a 10 s period.
 3. Enter X/Y wind in m/s and click **Apply Wind**. Click **Wind OFF** to enable wind; **Wind ON** disables it.
 4. Click **Land**, wait for touchdown, then **Exit**. Exit closes the simulation and the launcher's PX4 process.
 
@@ -110,7 +110,7 @@ The supplied checkpoint and PX4 binary are ready to use; normal operation requir
 | Set / Speed | Accepted components / resultant wind speed |
 | Emergency | Immediately stop simulated rotors |
 
-Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le3$ m/s; positive values mean air moving along the positive world axis. Wind Z and applied force Z are zero. Blue markers show horizontal wind direction.
+Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le10$ m/s; positive values mean air moving along the positive world axis. Wind Z and applied force Z are zero. Blue markers show horizontal wind direction.
 
 ## Model
 
@@ -126,9 +126,9 @@ $$
 
 $R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^W$ is wind velocity, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains horizontal acceleration.
 
-The result passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
+The default horizontal equivalent drag area is **0.25 m²**. The gain derived at the reference condition scales the world-frame XY acceleration before it passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
 
-The surrogate combines a quadratic-drag prior with a **6→64→64→3 Tanh residual network**. The supplied pilot uses **3,000 paired synthetic samples** from 29 component drag proxies extracted from model XML. Sampling/training seeds are 7/42. This simplified reference model has no real-aircraft aerodynamic calibration.
+The surrogate combines a quadratic-drag prior with a **6→64→64→3 Tanh residual network**. The earlier v1 pilot uses **3,000 paired synthetic samples** from 29 component drag proxies extracted from model XML. Sampling/training seeds are 7/42. This simplified reference model has no real-aircraft aerodynamic calibration.
 
 <details>
 <summary>PINN training plot and technical reports</summary>
@@ -136,7 +136,8 @@ The surrogate combines a quadratic-drag prior with a **6→64→64→3 Tanh resi
 ![PINN pilot training and holdout errors](docs/figures/x4-950-pinn-pilot-v1.png)
 
 - [Reference model](docs/x4-950-reference-v1.md)
-- [Model card](docs/models/x4-950-pinn-pilot-v1.md)
+- [Default wide-range model and reproduction](docs/models/x4-950-pinn-wind-10-v2.md)
+- [v1 model card](docs/models/x4-950-pinn-pilot-v1.md)
 - [Pilot training report](docs/X4_PINN_PILOT_2026-11-10.md)
 - [SITL integration report](docs/X4_PINN_INTEGRATION_2026-11-10.md)
 - [PX4 runtime and source provenance](docs/px4.md)

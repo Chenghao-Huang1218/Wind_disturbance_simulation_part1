@@ -168,6 +168,13 @@ customized, export the same absolute path in both terminals. Stale session
 requests are ignored, and a second launcher cannot use a locked state directory.
 Terminal windows remain open when their programs finish.
 
+If another PX4 owns instance 0, this project can use a separate instance and
+state directory. For instance 6, start the launcher with `-d -i 6` and a
+separate `--state-dir`. Start the simulation with `--sim-tcp-port 4566
+--command-udp-port 14586 --target-system 7`, and set `PX4_STATE_DIR` to that
+same absolute directory for coordinated EXIT. The PX4 startup script assigns
+MAVLink system ID `instance + 1`.
+
 An already running SITL started with the old launcher has no supervisor. Stop
 that instance manually once and restart it with the updated launcher before
 using coordinated EXIT. A missing manager produces a message in terminal two;

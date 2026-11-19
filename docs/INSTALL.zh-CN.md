@@ -131,7 +131,7 @@ source .venv/bin/activate
 python scripts/run_simulation.py
 ```
 
-默认加载打包的新 `pinn-x4`。显式回退时，仅替换终端二最后一行：
+默认加载打包的 0–10 m/s 宽域 `pinn-x4`。显式选择 0–3 m/s 解析或旧 PINN 时，仅替换终端二最后一行。
 
 ```bash
 python scripts/run_simulation.py --wind-backend analytic
@@ -141,9 +141,9 @@ python scripts/run_simulation.py --wind-backend pinn
 
 等待 `PX4: connected` → `Unlock` → 确认 `armed` → `Takeoff` → 稳定悬停。
 需要风扰时输入世界系 X/Y 风速，点击 `Apply Wind`，被接受后点击 `Wind OFF` 开启。
-要求 `sqrt(X²+Y²) <= 3 m/s`、Z=0；例如 `[2,2,0]` 有效，`[3,3,0]` 无效。
+默认模型要求 `sqrt(X²+Y²) <= 10 m/s`、Z=0。`[6,8,0]` 在边界上，`[10,10,0]` 超域。
 结束时 `Land`，落地后 `Exit`；退出只管理该启动器创建的 SITL 子进程。
-详细面板说明和训练复现见 [README](../README.md)，对照流程见
+详细面板说明和训练复现见 [README](../README.zh-CN.md)，对照流程见
 [新 PINN 接入与 SITL 报告](X4_PINN_INTEGRATION_2026-11-10.md)。
 
 ## 常见问题

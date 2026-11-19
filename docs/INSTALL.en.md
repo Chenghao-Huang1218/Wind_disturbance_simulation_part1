@@ -141,8 +141,8 @@ source .venv/bin/activate
 python scripts/run_simulation.py
 ```
 
-The default is the bundled new `pinn-x4`. For an explicit fallback, replace only
-the last command in terminal 2:
+The default is the bundled 0–10 m/s `pinn-x4`. To select the 0–3 m/s analytical
+or legacy PINN option, replace the last command in terminal 2.
 
 ```bash
 python scripts/run_simulation.py --wind-backend analytic
@@ -152,8 +152,9 @@ python scripts/run_simulation.py --wind-backend pinn
 
 Wait for `PX4: connected` → `Unlock` → confirmed `armed` → `Takeoff` → stable hover.
 For wind, enter world X/Y components, click `Apply Wind`, wait for acceptance,
-then click `Wind OFF` to enable it. Require `sqrt(X²+Y²) <= 3 m/s` and Z=0:
-`[2,2,0]` is valid; `[3,3,0]` is invalid. Finish with `Land`, then `Exit` after
+then click `Wind OFF` to enable it. The default requires `sqrt(X²+Y²) <= 10 m/s`
+and Z=0. `[6,8,0]` is on the boundary and `[10,10,0]` exceeds it.
+Finish with `Land`, then `Exit` after
 touchdown. Exit manages only the SITL child created by that launcher.
 See the [README](../README.en.md) for panel details and training reproduction, and
 the [new PINN integration/SITL report](X4_PINN_INTEGRATION_2026-11-10.md) for comparisons.
