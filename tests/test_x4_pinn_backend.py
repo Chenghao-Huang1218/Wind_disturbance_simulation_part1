@@ -19,6 +19,7 @@ from wind_field_simulation.training.xml_parameters import (
     export_reference_bundle,
 )
 from wind_field_simulation.wind_backends import X4PinnWindResidualModel
+from wind_field_simulation.wind_randomization import draw_drag_scales
 
 
 @pytest.fixture()
@@ -117,16 +118,29 @@ def test_cli_default_x4_and_backend_specific_paths(
     assert default.reference_config.is_file()
     assert default.pinn_checkpoint.is_relative_to(simulation.default_pinn_checkpoint_dir())
     assert default.pinn_checkpoint.is_file()
+    assert (default.drag_variation, default.gust_amplitude_m_s,
+            default.gust_period_s, default.wind_seed) == (.20, 1.5, 4., 42)
     legacy = simulation.parse_config(["--wind-backend", "pinn"])
     assert legacy.pinn_checkpoint is None and legacy.reference_config is None
+    assert not legacy.analytic_wind_experiment
     analytic = simulation.parse_config(["--wind-backend", "analytic"])
     assert analytic.pinn_checkpoint is None
+    assert not analytic.analytic_wind_experiment
     assert analytic.reference_config == simulation.default_wind_reference_config()
     assert analytic.reference_config != default.reference_config
     selected = simulation.parse_config(["--pinn-checkpoint", str(checkpoint),
                                          "--reference-config", str(reference)])
     assert selected.pinn_checkpoint == checkpoint
     assert selected.reference_config == reference
+    assert not selected.analytic_wind_experiment
+    baseline = simulation.parse_config([
+        "--pinn-checkpoint", str(simulation.bundled_x4_v2_checkpoint()),
+    ])
+    assert not baseline.analytic_wind_experiment
+    steady = simulation.parse_config(["--gust-amplitude", "0"])
+    assert steady.drag_variation == .20 and steady.gust_amplitude_m_s == 0.
+    nominal = simulation.parse_config(["--drag-variation", "0"])
+    assert nominal.drag_variation == 0. and nominal.gust_amplitude_m_s == 1.5
     with pytest.raises(ValueError, match="pinn-x4"):
         simulation.parse_config(["--wind-backend", "pinn", "--pinn-checkpoint", str(checkpoint)])
     with pytest.raises(ValueError, match="pinn-x4"):
@@ -147,8 +161,9 @@ def test_no_argument_app_loads_bundled_x4_and_preserves_apply_gate(
         assert app.pinn_predictor.checkpoint_sha256 == (
             "37124dd930a990cef6bd8baa3137d72f2df28a771a113847d844e8574b32891c")
         assert app.wind_max_horizontal_m_s == 10.0
-        assert tuple(app.pinn_predictor.drag_group_scales.values()) == (1., 1., 1.)
-        assert app.wind_gust is None
+        assert app.pinn_predictor.drag_group_scales == draw_drag_scales(.20, 42)
+        assert app.wind_gust is not None
+        assert (app.wind_gust.amplitude_m_s, app.wind_gust.period_s, app.wind_gust.seed) == (1.5, 4., 42)
         assert app.wind_field is None
         app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
         assert not app.flight_control.wind_enabled
@@ -159,6 +174,14 @@ def test_no_argument_app_loads_bundled_x4_and_preserves_apply_gate(
         assert not app.flight_control.wind_enabled
         app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.SET_WIND, (10, 10, 0)))
         np.testing.assert_array_equal(app.wind_field.configured_velocity_world, [6, 8, 0])
+        app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.SET_WIND, (4, 4, 0)))
+        app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
+        np.testing.assert_array_equal(app._apply_wind_force()[0], [4, 4, 0])
+        app.data.time += 2.
+        peak_wind, _, force = app._apply_wind_force()
+        assert np.linalg.norm(peak_wind - [4, 4, 0]) == pytest.approx(1.5)
+        assert force[2] == 0.
+
     finally:
         app._close_runtime()
 
@@ -288,6 +311,8 @@ def test_bundled_wide_drag_area_sets_applied_force(
     if backend == "analytic":
         reference = simulation.default_wide_wind_reference_config()
         flags += ["--wind-backend", backend, "--reference-config", str(reference)]
+    else:
+        flags += ["--drag-variation", "0", "--gust-amplitude", "0"]
     app = simulation.WindSimulationApp(
         simulation.parse_config(flags), bridge=RecordingBridge(),
     )

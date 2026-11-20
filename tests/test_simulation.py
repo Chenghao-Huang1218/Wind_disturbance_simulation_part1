@@ -7,12 +7,16 @@ import queue
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 import pytest
 from matplotlib.backend_bases import MouseEvent
 from matplotlib import colors as matplotlib_colors
+
+
+if TYPE_CHECKING:
+    from wind_field_simulation.simulation import SimulationConfig
 
 
 SCRIPT_PATH = (
@@ -32,6 +36,13 @@ def load_simulation_module():
     from wind_field_simulation import simulation
 
     return simulation
+
+
+def parse_nominal_wind_config(argv: Sequence[str]) -> SimulationConfig:
+    """Build settings for test predictors that use the legacy steady-wind domain."""
+    return load_simulation_module().parse_config([
+        "--drag-variation", "0", "--gust-amplitude", "0", *argv,
+    ])
 
 
 def test_default_resources_are_bundled() -> None:
@@ -204,7 +215,7 @@ def test_vertical_wind_commands_preserve_horizontal_configuration(
     """Reject vertical wind before setup and preserve accepted horizontal wind."""
     simulation = load_simulation_module()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=RecordingPinnPredictor(),
     )
     invalid = simulation.UiCommand(
@@ -254,7 +265,7 @@ def test_unconfigured_runtime_blocks_wind_even_with_cli_draft(cli: list[str]) ->
     simulation = load_simulation_module()
     predictor = RecordingPinnPredictor()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer", *cli]),
+        parse_nominal_wind_config(["--no-viewer", *cli]),
         bridge=RecordingBridge(), pinn_predictor=predictor,
     )
     app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
@@ -280,7 +291,7 @@ def test_apply_acknowledgement_unlocks_wind_switch(
     """Only accepted settings unlock a real switch click, including zero wind."""
     simulation = load_simulation_module()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=RecordingPinnPredictor(),
     )
     panel = simulation.ControlPanel(app.command_queue)
@@ -407,7 +418,7 @@ def test_runtime_wind_edit_reaches_force_and_snapshot(enabled: bool) -> None:
     bridge = RecordingBridge()
     predictor = RecordingPinnPredictor()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer", "--wind-x", "3"]),
+        parse_nominal_wind_config(["--no-viewer", "--wind-x", "3"]),
         bridge=bridge, pinn_predictor=predictor,
     )
     app.flight_control.wind_enabled = enabled
@@ -447,7 +458,7 @@ def test_runtime_rejects_invalid_wind_command(payload: Any) -> None:
     """Malformed queued commands cannot partially update wind or crash flight."""
     simulation = load_simulation_module()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=RecordingPinnPredictor(),
     )
     app._process_ui_command(simulation.UiCommand(
@@ -483,7 +494,7 @@ def test_unsafe_wind_edit_preserves_real_pinn_inference(unsafe: float) -> None:
         device=simulation.torch.device("cpu"),
     )
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=predictor,
     )
     app._process_ui_command(simulation.UiCommand(
@@ -1600,7 +1611,7 @@ def test_horizontal_wind_clears_vertical_force_and_stale_filter(
     simulation = load_simulation_module()
     predictor = RecordingPinnPredictor(np.array([4.0, -2.0, raw_vertical]))
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=predictor,
     )
     app._process_ui_command(simulation.UiCommand(
@@ -1635,7 +1646,7 @@ def test_real_pinn_horizontal_wind_applies_no_vertical_force(
         device=simulation.torch.device("cpu"),
     )
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=predictor,
     )
     app.data.qvel[app.bindings.main_dof_adr + 2] = vertical_velocity
@@ -1654,7 +1665,7 @@ def test_application_pinn_force_respects_panel_toggle() -> None:
     simulation = load_simulation_module()
     predictor = RecordingPinnPredictor(np.array([4.0, -2.0, 1.0]))
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(),
         pinn_predictor=predictor,
     )
@@ -1698,7 +1709,7 @@ def test_wind_disable_resets_pinn_force_and_filter() -> None:
     simulation = load_simulation_module()
     predictor = RecordingPinnPredictor(np.array([4.0, -2.0, 1.0]))
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(),
         pinn_predictor=predictor,
     )
@@ -1733,7 +1744,7 @@ def test_application_dispatches_unlock_and_takeoff_separately() -> None:
     simulation = load_simulation_module()
     bridge = RecordingBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1759,7 +1770,7 @@ def test_rejected_arm_ack_clears_pending_request_and_reports_reason() -> None:
     bridge.arm_ack_sequence = 1
     bridge.last_arm_ack_result = 1
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1776,7 +1787,7 @@ def test_application_sends_accepted_move_target_through_px4_bridge() -> None:
     simulation = load_simulation_module()
     bridge = RecordingBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1829,7 +1840,7 @@ def test_application_trajectory_command_opens_realtime_plot(
         shown_figures.append,
     )
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer", *flags]),
+        parse_nominal_wind_config(["--no-viewer", *flags]),
         bridge=RecordingBridge(),
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1859,7 +1870,7 @@ def test_circle_holds_exact_endpoint_and_draws_the_settling_tail(
     bridge = RecordingBridge()
     bridge.armed = bridge.offboard = True
     app = sim.WindSimulationApp(
-        sim.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge, pinn_predictor=RecordingPinnPredictor(),
     )
     try:
@@ -1916,7 +1927,7 @@ def test_application_exit_is_safe_and_idempotent() -> None:
     simulation = load_simulation_module()
     bridge = RecordingBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1946,7 +1957,7 @@ def test_exit_stops_iteration_before_rotor_output_is_reapplied() -> None:
 
     bridge = NoRotorAfterExitBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -1965,7 +1976,7 @@ def test_application_iteration_advances_mujoco_without_px4_sockets() -> None:
     simulation = load_simulation_module()
     bridge = RecordingBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )
@@ -2033,7 +2044,7 @@ def test_run_draws_active_wind_before_viewer_sync(
             pass
 
     bridge = RecordingBridge()
-    config = simulation.parse_config([])
+    config = parse_nominal_wind_config([])
     app = simulation.WindSimulationApp(
         config,
         bridge=bridge,
@@ -2126,7 +2137,7 @@ def test_run_exit_closes_resources_without_viewer_sync(
 
     bridge = RecordingBridge()
     app = simulation.WindSimulationApp(
-        simulation.parse_config([]),
+        parse_nominal_wind_config([]),
         bridge=bridge,
         pinn_predictor=RecordingPinnPredictor(),
     )

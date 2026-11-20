@@ -1,6 +1,6 @@
 # X4-950 PINN v3 分组阻力与阵风
 
-2026-11-20。v3 是 X4-950 与 Airbot Play 固定几何下的九输入气动力代理，由默认 `pinn-x4` 加载。无参数启动采用三个单位倍率和零阵风幅值。[v2](x4-950-pinn-wind-10-v2.md) 与 [v1](x4-950-pinn-pilot-v1.md) 可显式加载。
+2026-11-20。v3 是 X4-950 与 Airbot Play 固定几何下的九输入气动力代理，由默认 `pinn-x4` 加载。无参数启动启用 ±20% 的分组阻力随机化、1.5 m/s 峰值和 4 s 周期的水平阵风，种子为 42。风扰在面板设置并开启后生效。[v2](x4-950-pinn-wind-10-v2.md) 与 [v1](x4-950-pinn-pilot-v1.md) 可显式加载。
 
 ## 输入、输出与施力
 
@@ -83,12 +83,10 @@ v3 的中位耗时略低，P99 更高。这组时延不足以证明 v3 在同一
 ```bash
 conda activate env_uav
 V3=src/wind_field_simulation/assets/checkpoints/x4_950_wind_randomized_v3/candidate.pt
-python scripts/run_simulation.py \
-  --drag-variation 0.20 --gust-amplitude 1.5 --gust-period 4 --wind-seed 42 \
-  --wind-x 4 --wind-y 4
+python scripts/run_simulation.py --wind-x 4 --wind-y 4
 ```
 
-解析对照使用 `--wind-backend analytic` 和同一组风参数。六维对照显式传入 v2 的 `candidate.pt`，以同一瞬时来流运行，内部倍率固定为 [1, 1, 1]。运行日志分别记录试验抽样值 `experiment_drag_group_scales` 和模型实际倍率 `drag_group_scales`，v2 的后一字段为空。
+显式传入 `--drag-variation 0 --gust-amplitude 0` 可采用名义阻力和恒风。解析对照可使用 `--wind-backend analytic --drag-variation 0.20 --gust-amplitude 1.5 --gust-period 4 --wind-seed 42`。六维对照同时传入 v2 的 `candidate.pt` 和同一组风参数以重放来流，内部倍率固定为 [1, 1, 1]。运行日志分别记录试验抽样值 `experiment_drag_group_scales` 和模型实际倍率 `drag_group_scales`，v2 的后一字段为空。
 
 复现匹配闭环需释放所选本机 SITL 端口。下例逐次运行九个组合，使用项目随包 PX4 二进制和同一份仿真参数种子。每次运行保存生产 50 Hz 日志、PX4 控制台、ULog 及闭环指标。
 

@@ -2612,12 +2612,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Optional new JSONL path for 50 Hz comparison observations.",
     )
     parser.add_argument(
-        "--drag-variation", type=float, default=0.0,
-        help="Per-group drag half-width. Applied by analytic and X4 v3; v2 is nominal.",
+        "--drag-variation", type=float,
+        help="Per-group drag half-width (bundled v3: 0.20). Use 0 for nominal drag.",
     )
     parser.add_argument(
-        "--gust-amplitude", type=float, default=0.0,
-        help="Disturbance experiment: peak horizontal gust magnitude in m/s.",
+        "--gust-amplitude", type=float,
+        help="Peak horizontal gust in m/s (bundled v3: 1.5). Use 0 for steady wind.",
     )
     parser.add_argument(
         "--gust-period", type=float, default=4.0,
@@ -2651,6 +2651,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
     """Parses command-line arguments into a validated configuration."""
     args = build_argument_parser().parse_args(argv)
+    checkpoint = args.pinn_checkpoint.resolve() if args.pinn_checkpoint else None
+    use_v3_defaults = args.wind_backend == "pinn-x4" and (
+        checkpoint is None or checkpoint == default_x4_pinn_checkpoint().resolve()
+    )
+    default_drag, default_gust = (.20, 1.5) if use_v3_defaults else (0., 0.)
     trajectory_duration = args.trajectory_duration
     components = [args.wind_x, args.wind_y]
     wind_draft = (
@@ -2679,10 +2684,10 @@ def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
             args.reference_config.resolve() if args.reference_config else None
         ),
         run_log=args.run_log.resolve() if args.run_log else None,
-        pinn_checkpoint=(args.pinn_checkpoint.resolve() if args.pinn_checkpoint else None),
+        pinn_checkpoint=checkpoint,
         target_system=args.target_system,
-        drag_variation=args.drag_variation,
-        gust_amplitude_m_s=args.gust_amplitude,
+        drag_variation=default_drag if args.drag_variation is None else args.drag_variation,
+        gust_amplitude_m_s=default_gust if args.gust_amplitude is None else args.gust_amplitude,
         gust_period_s=args.gust_period,
         wind_seed=args.wind_seed,
     )

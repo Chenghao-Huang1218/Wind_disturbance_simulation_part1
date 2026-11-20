@@ -20,7 +20,7 @@ from wind_field_simulation.training.xml_parameters import (
     export_reference_bundle,
 )
 from wind_field_simulation.wind_backends import AnalyticalWindResidualModel
-from test_simulation import RecordingBridge, RecordingPinnPredictor
+from test_simulation import RecordingBridge, RecordingPinnPredictor, parse_nominal_wind_config
 
 
 @pytest.fixture()
@@ -437,7 +437,7 @@ def test_log_reads_current_free_joint_state_after_mujoco_step(
 def test_both_wind_predictors_receive_current_root_angular_rate() -> None:
     predictor = RecordingPinnPredictor()
     app = simulation.WindSimulationApp(
-        simulation.parse_config(["--no-viewer"]),
+        parse_nominal_wind_config(["--no-viewer"]),
         bridge=RecordingBridge(), pinn_predictor=predictor,
     )
     # Simulate integrated state advancing while sensor caches remain stale.

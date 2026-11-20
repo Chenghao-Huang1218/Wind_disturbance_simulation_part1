@@ -128,7 +128,7 @@ $R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^
 
 The default horizontal equivalent drag area is **0.25 m²**. The gain derived at the reference condition scales the world-frame XY acceleration before it passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
 
-v3 takes nine inputs: body-frame relative air velocity, body angular rate, and three drag multipliers $\mathbf s$. It combines a quadratic prior and learned residuals per group, then sums the responses with the three multipliers. The defaults are unit multipliers and zero gust amplitude. Enable the disturbances with `--drag-variation 0.20 --gust-amplitude 1.5 --gust-period 4 --wind-seed 42`.
+v3 takes nine inputs: body-frame relative air velocity, body angular rate, and three drag multipliers $\mathbf s$. It combines a quadratic prior and learned residuals per group, then sums the responses with the three multipliers. The bundled v3 defaults to three randomized drag multipliers (±20%, range [0.8, 1.2] each) and horizontal gusts with a 1.5 m/s peak, a 4 s period, and seed 42. The multipliers are drawn once at startup and replay with the same seed. After you click **Apply Wind** and switch wind on, gusts are added to the configured baseline wind. For nominal drag and steady inflow, pass `--drag-variation 0 --gust-amplitude 0`.
 
 ### How the PINN v3 dataset is generated
 
