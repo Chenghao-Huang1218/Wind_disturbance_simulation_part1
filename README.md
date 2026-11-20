@@ -128,26 +128,7 @@ The supplied checkpoint and PX4 binary are ready to use; normal operation requir
 
 Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le10$ m/s; positive values mean air moving along the positive world axis. Wind Z and applied force Z are zero. Blue markers show horizontal wind direction.
 
-<details>
-<summary>Runtime force application</summary>
-
-Each step, the default **pinn-x4** backend (X4 PINN v3) evaluates wind and no-wind inputs at the same aircraft state:
-
-$$
-\mathbf a_{\mathrm{wind}}^W
-=P_{xy}R_{WB}\bigl[
-g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B,\mathbf s)
--g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B,\mathbf s)
-\bigr].
-$$
-
-$R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^W$ is wind velocity, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains horizontal acceleration.
-
-The default horizontal equivalent drag area is **0.25 m²**. The gain derived at the reference condition scales the world-frame XY acceleration before it passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
-
-v3 takes nine inputs: body-frame relative air velocity, body angular rate, and three drag multipliers $\mathbf s$. It combines a quadratic prior and learned residuals per group, then sums the responses with the three multipliers. The bundled v3 defaults to three randomized drag multipliers (±20%, range [0.8, 1.2] each) and horizontal gusts with a 1.5 m/s peak, a 4 s period, and seed 42. The multipliers are drawn once at startup and replay with the same seed. After you click **Apply Wind** and switch wind on, gusts are added to the configured baseline wind. For nominal drag and steady inflow, pass `--drag-variation 0 --gust-amplitude 0`.
-
-</details>
+The default **pinn-x4** backend uses v3 with ±20% group drag variation and horizontal gusts (1.5 m/s peak, 4 s period, seed 42). Gusts are added after you apply the baseline wind and switch wind on. For nominal drag and steady wind, pass `--drag-variation 0 --gust-amplitude 0`. [v3 model card](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 ## 7. PINN training data generation
 

@@ -128,26 +128,7 @@ python scripts/run_simulation.py
 
 初始风速输入为空。水平合风速满足 $\sqrt{w_x^2+w_y^2}\le10$ m/s，正值表示空气沿世界坐标正方向流动。竖直风速与实际竖直扰动力均为零，蓝色标记显示水平风向。
 
-<details>
-<summary>运行时施力</summary>
-
-默认 **pinn-x4** 后端（X4 PINN v3）在每步以同一飞机状态计算有风、无风的加速度差：
-
-$$
-\mathbf a_{\mathrm{wind}}^W
-=P_{xy}R_{WB}\bigl[
-g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B,\mathbf s)
--g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B,\mathbf s)
-\bigr].
-$$
-
-$R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度，$\mathbf w^W$ 为风速，$P_{xy}=\mathrm{diag}(1,1,0)$ 保留水平加速度。
-
-默认水平等效阻力面积为 **0.25 m²**。按参考工况计算的增益作用于世界坐标 XY 加速度，随后依次经过 EMA（$\alpha=0.05$）、各轴 ±6 m/s² 限幅，再乘整机质量 8.0004 kg，施加到根 body。
-
-v3 使用机体系相对气速、机体系角速度和三组阻力倍率 $\mathbf s$，共九维。每组采用二次阻力先验与学习残差，再按倍率合成总响应。随包 v3 默认开启三组阻力倍率随机化（±20%，各组范围 [0.8, 1.2]）与水平阵风（峰值 1.5 m/s、周期 4 s、种子 42）。倍率每次启动抽取一次，同种子可复现。在面板点击 **Apply Wind** 并开启风扰后，阵风叠加到设定的基准风上。需要名义阻力和恒定来流时，可同时传入 `--drag-variation 0 --gust-amplitude 0`。
-
-</details>
+默认 **pinn-x4** 后端使用 v3，启用 ±20% 分组阻力随机化和水平阵风（峰值 1.5 m/s、周期 4 s、种子 42）。应用基准风并开启风扰后，阵风叠加到基准风上。使用 `--drag-variation 0 --gust-amplitude 0` 可设置名义阻力和恒风。[v3 模型卡](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 ## 7. PINN训练数据生成
 
