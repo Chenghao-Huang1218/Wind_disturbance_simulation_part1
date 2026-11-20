@@ -128,7 +128,8 @@ python scripts/run_simulation.py
 
 初始风速输入为空。水平合风速满足 $\sqrt{w_x^2+w_y^2}\le10$ m/s，正值表示空气沿世界坐标正方向流动。竖直风速与实际竖直扰动力均为零，蓝色标记显示水平风向。
 
-## 气动模型
+<details>
+<summary>运行时施力</summary>
 
 默认 **pinn-x4** 后端（X4 PINN v3）在每步以同一飞机状态计算有风、无风的加速度差：
 
@@ -146,38 +147,31 @@ $R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度�
 
 v3 使用机体系相对气速、机体系角速度和三组阻力倍率 $\mathbf s$，共九维。每组采用二次阻力先验与学习残差，再按倍率合成总响应。随包 v3 默认开启三组阻力倍率随机化（±20%，各组范围 [0.8, 1.2]）与水平阵风（峰值 1.5 m/s、周期 4 s、种子 42）。倍率每次启动抽取一次，同种子可复现。在面板点击 **Apply Wind** 并开启风扰后，阵风叠加到设定的基准风上。需要名义阻力和恒定来流时，可同时传入 `--drag-variation 0 --gust-amplitude 0`。
 
-### PINN训练数据生成
+</details>
 
-#### 原始解析模型
+## PINN训练数据生成
 
-二次阻力的标量形式为 $D=\tfrac12\rho V^2 C_D A$，其中 $V$ 是相对气速。本项目在固定几何的 29 个部件代理上逐轴应用该模型。代理 $j$ 的局部相对气速 $\mathbf u_j$ 与名义局部阻力 $\mathbf f_{j,0}$ 为：
+### 原始解析模型与关键参数
+
+标量二次阻力为 $D=\tfrac12\rho V^2 C_D A$，其中 $V$ 是相对气速。本项目将该模型应用到 X4-950 与 Airbot Play 的 29 个固定几何代理。代理 $j$ 的局部相对气速、逐轴阻力、世界系合力及同态扰动加速度为：
 
 $$
 \begin{aligned}
 \mathbf u_j(\mathbf w^W)
- &=Q_j^{\mathsf T}\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
-   +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
+ &= Q_j^{\mathsf T}\!\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
+    +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
 \mathbf f_{j,0}(\mathbf w^W)
- &=-\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
-     \odot\mathbf u_j\odot|\mathbf u_j|.
+ &= -\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
+      \odot\mathbf u_j\odot|\mathbf u_j|,\\
+\mathbf F_0^W(\mathbf w^W)
+ &= R_{WB}\sum_{j=1}^{29}Q_j\mathbf f_{j,0}(\mathbf w^W),\\
+\mathbf y_{xy,0}^W
+ &= \frac{P_{xy}}{m}
+    \left[\mathbf F_0^W(\mathbf w^W)-\mathbf F_0^W(\mathbf 0)\right].
 \end{aligned}
 $$
 
-$Q_j$ 将代理局部坐标映射到机体系，$\mathbf r_j^B$ 是根点到代理中心的偏移，$\mathbf A_j$ 是局部三轴参考面积。$\odot$ 和绝对值均按分量计算。将各代理阻力旋转到世界系并求和，对同一状态取有风和无风之差，得到水平扰动加速度。v3 引入组倍率 $\mathbf s$ 后，计算式为：
-
-$$
-\begin{aligned}
-\mathbf F^W(\mathbf w^W;\mathbf s)
- &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy}^W
- &=\frac{P_{xy}}{m}
-   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
-\end{aligned}
-$$
-
-$g(j)$ 是代理所属的阻力组。取 $\mathbf s=(1,1,1)$ 即得原始固定参数模型。两分支共享根点速度、姿态、角速度、几何和倍率，分别保存完整三轴力。数据还保存各组单位倍率响应与配对加速度增量。[二次阻力公式](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [项目解析参考](docs/x4-950-reference-v1.md)
-
-#### 关键参数
+$R_{WB}$ 将机体系映射到世界系，$Q_j$ 将代理坐标映射到机体系，$\mathbf r_j^B$ 是根点到代理中心的偏移。$\mathbf A_j$ 为局部三轴参考面积，$\odot$ 与绝对值均按分量计算，$P_{xy}=\mathrm{diag}(1,1,0)$ 保留水平分量。[二次阻力公式](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [项目解析参考](docs/x4-950-reference-v1.md)
 
 | 参数 | 取值与定义 |
 | --- | --- |
@@ -189,16 +183,32 @@ $g(j)$ 是代理所属的阻力组。取 $\mathbf s=(1,1,1)$ 即得原始固定�
 | 解析参考等效阻力面积 $(C_DA)_{\mathrm{ref}}$ | 约 0.11951 m²，由冻结几何求得 |
 | 仿真名义等效阻力面积 $(C_DA)_{\mathrm{nom}}$ | 0.25 m²，用于运行时水平施力 |
 
-等效阻力面积以机体静止、水平、零航向，来风为 $(4,4,0)$ m/s、倍率均为 1 且无阵风的工况定义。该工况下，以沿风力除以动压 $\tfrac12\rho V^2$ 得到 $(C_DA)_{\mathrm{ref}}$。运行时将水平增量乘以 $0.25/0.11951\approx2.0919$，名义沿风力为 4.90 N。训练标签保留增益、滤波和限幅前的解析结果。
+等效阻力面积以机体静止、水平、零航向，来风为 $(4,4,0)$ m/s、倍率均为 1 且无阵风的工况定义。该工况下，以沿风力除以动压 $\tfrac12\rho V^2$ 得到 $(C_DA)_{\mathrm{ref}}$。运行时将水平增量乘以 $0.25/0.11951\approx2.0919$，名义沿风力为 4.90 N。
 
-#### 随机化与样本划分
+### 样本随机化与训练样本生成
+
+基准风按风速和风向分层，覆盖零风、弱风和上限工况。在固定几何的解析模型中加入分组阻力倍率和水平阵风。
 
 | 随机量 | 抽样与作用 |
 | --- | --- |
 | 三组阻力倍率 $s_g$ | 机身、机臂及电机、机械臂各从基础分布 $\mathcal U(0.8,1.2)$ 抽取一个倍率，对组内代理的阻力等比例缩放。倍率在同一风过程及有风／无风配对内固定。 |
 | 水平阵风 | 有阵风的过程抽取峰值 $G\sim\mathcal U(0.5,2.0)$ m/s 和周期 $T\sim\mathcal U(2,6)$ s。每个脉冲抽取方向 $\phi_k\sim\mathcal U(0,2\pi)$，向基准风叠加 $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$，其中 $\tau=t\bmod T$。叠加后限制水平合风速至 10 m/s。 |
 
-基准风按风速和风向分层，覆盖零风、弱风和上限工况。每 10 对样本共享一个风过程和一组倍率，按整组划分为 **30,000 训练／6,000 验证／6,000 测试对**，种子为 **17653／18659／19663**。训练和验证排除三组倍率均偏离 1 至少 0.12 的组合，测试集中有 1,500 对样本覆盖这些未见组合。标签由参数化解析模型合成。[v3 复现与验证](docs/models/x4-950-pinn-wind-randomized-v3.md)
+对每个抽样状态，分别用瞬时来流 $\mathbf w^W(t)$ 和零环境风求解解析力。两分支共享根点速度、姿态、角速度、几何及三组倍率。令 $g(j)$ 表示代理 $j$ 所属的阻力组，随机化后的世界系力与监督标签为：
+
+$$
+\begin{aligned}
+\mathbf F^W(\mathbf w^W;\mathbf s)
+ &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
+\mathbf y_{xy}^W
+ &=\frac{P_{xy}}{m}
+   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
+\end{aligned}
+$$
+
+每个分支的九维输入由机体系相对气速、角速度和三组倍率组成。归档保存两分支的完整三轴力、各组单位倍率响应和水平加速度增量。训练标签取运行时增益、滤波和限幅前的解析结果。
+
+每 10 对样本共享一个风过程和一组倍率，按整组划分为 **30,000 训练／6,000 验证／6,000 测试对**，种子为 **17653／18659／19663**。训练和验证排除三组倍率均偏离 1 至少 0.12 的组合，测试集中有 1,500 对样本覆盖这些未见组合。[v3 复现与验证](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 <details>
 <summary>模型验证与复现</summary>
