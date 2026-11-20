@@ -136,29 +136,34 @@ The default **pinn-x4** backend uses v3 with ±20% group drag variation and hori
 
 The scalar quadratic drag law is $D=\tfrac12\rho V^2 C_D A$, where $V$ is relative airspeed. The reference applies this law to 29 fixed-geometry proxies for the X4-950 and Airbot Play. For proxy $j$, the equations give local relative airspeed, axis-wise drag, the total world-frame force, and the paired horizontal disturbance acceleration:
 
-$$
+```math
 \begin{aligned}
-\mathbf u_j(\mathbf w^W)
- &= Q_j^{\mathsf T}\!\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
-    +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
-\mathbf f_{j,0}(\mathbf w^W)
- &= -\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
-      \odot\mathbf u_j\odot|\mathbf u_j|,\\
-\mathbf F_0^W(\mathbf w^W)
- &= R_{WB}\sum_{j=1}^{29}Q_j\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy,0}^W
- &= \frac{P_{xy}}{m}
-    \left[\mathbf F_0^W(\mathbf w^W)-\mathbf F_0^W(\mathbf 0)\right].
+\boldsymbol{u}_j(\boldsymbol{w}^W)
+ &= Q_j^{\mathsf T}\left[R_{WB}^{\mathsf T}(\boldsymbol{v}_O^W-\boldsymbol{w}^W)
+    +\boldsymbol{\omega}^B\times\boldsymbol{r}_j^B\right],\\[4pt]
+\boldsymbol{f}_{j,0}(\boldsymbol{w}^W)
+ &= -\tfrac12\rho\,(\boldsymbol{C}_D\odot\boldsymbol{A}_j)
+      \odot\boldsymbol{u}_j\odot\lvert\boldsymbol{u}_j\rvert.
 \end{aligned}
-$$
+```
 
-$R_{WB}$ maps body to world, $Q_j$ maps proxy axes to the body frame, and $\mathbf r_j^B$ is the offset from the root to the proxy center. $\mathbf A_j$ contains the three local reference areas, $\odot$ and absolute value act element-wise, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains the horizontal components. [Quadratic drag law](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [Project reference model](docs/x4-950-reference-v1.md)
+```math
+\begin{aligned}
+\boldsymbol{F}_0^W(\boldsymbol{w}^W)
+ &= R_{WB}\sum\nolimits_{j=1}^{29}Q_j\boldsymbol{f}_{j,0}(\boldsymbol{w}^W),\\[4pt]
+\boldsymbol{y}_{xy,0}^W
+ &= \frac{P_{xy}}{m}
+    \left[\boldsymbol{F}_0^W(\boldsymbol{w}^W)-\boldsymbol{F}_0^W(\boldsymbol{0})\right].
+\end{aligned}
+```
+
+$R_{WB}$ maps body to world, $Q_j$ maps proxy axes to the body frame, and $\boldsymbol{r}_j^B$ is the offset from the root to the proxy center. $\boldsymbol{A}_j$ contains the three local reference areas, $\odot$ and absolute value act element-wise, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains the horizontal components. [Quadratic drag law](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [Project reference model](docs/x4-950-reference-v1.md)
 
 | Parameter | Value and definition |
 | --- | --- |
 | Air density $\rho$ | 1.225 kg/m³ |
-| Proxy drag coefficients $\mathbf C_D$ | $(1,1,1)$ on the three local axes |
-| Proxy reference areas $\mathbf A_j$ | Three axis-wise areas per proxy, derived from the X4-950 and Airbot Play XML geometry |
+| Proxy drag coefficients $\boldsymbol{C}_D$ | $(1,1,1)$ on the three local axes |
+| Proxy reference areas $\boldsymbol{A}_j$ | Three axis-wise areas per proxy, derived from the X4-950 and Airbot Play XML geometry |
 | Aircraft mass $m$ | 8.0004 kg |
 | Horizontal wind magnitude | 0–10 m/s with zero vertical wind |
 | Analytical reference drag area $(C_DA)_{\mathrm{ref}}$ | Approximately 0.11951 m² from the frozen geometry |
@@ -175,17 +180,17 @@ Baseline winds are stratified by speed and direction, with coverage of zero wind
 | Three drag multipliers $s_g$ | One draw per group (frame, booms and motors, manipulator) from a base $\mathcal U(0.8,1.2)$ distribution. Each draw scales the proxy forces in its group and stays fixed for the wind process and both branches of each pair. |
 | Horizontal gusts | Gust-enabled processes draw peak magnitude $G\sim\mathcal U(0.5,2.0)$ m/s and period $T\sim\mathcal U(2,6)$ s. Each pulse draws a direction $\phi_k\sim\mathcal U(0,2\pi)$ and adds $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$ to the baseline wind, where $\tau=t\bmod T$. The horizontal resultant is capped at 10 m/s. |
 
-For each sampled state, evaluate the analytical force at the instantaneous wind $\mathbf w^W(t)$ and at zero environmental wind. The two branches share root velocity, attitude, angular rate, geometry, and all three multipliers. With $g(j)$ denoting proxy $j$'s drag group, the randomized world-frame force and the training label are:
+For each sampled state, evaluate the analytical force at the instantaneous wind $\boldsymbol{w}^W(t)$ and at zero environmental wind. The two branches share root velocity, attitude, angular rate, geometry, and all three multipliers. With $g(j)$ denoting proxy $j$'s drag group, the randomized world-frame force and the training label are:
 
-$$
+```math
 \begin{aligned}
-\mathbf F^W(\mathbf w^W;\mathbf s)
- &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy}^W
- &=\frac{P_{xy}}{m}
-   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
+\boldsymbol{F}^W(\boldsymbol{w}^W;\boldsymbol{s})
+ &= R_{WB}\sum\nolimits_{j=1}^{29}Q_j\,s_{g(j)}\,\boldsymbol{f}_{j,0}(\boldsymbol{w}^W),\\[4pt]
+\boldsymbol{y}_{xy}^W
+ &= \frac{P_{xy}}{m}
+   \left[\boldsymbol{F}^W(\boldsymbol{w}^W(t);\boldsymbol{s})-\boldsymbol{F}^W(\boldsymbol{0};\boldsymbol{s})\right].
 \end{aligned}
-$$
+```
 
 Each branch has nine inputs: body-frame relative airspeed, angular velocity, and the three group multipliers. The dataset stores both full force vectors, each group's unit-multiplier response, and the paired horizontal acceleration increment. Labels are computed before runtime scaling, filtering, and clipping.
 

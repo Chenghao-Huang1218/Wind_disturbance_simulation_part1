@@ -136,29 +136,34 @@ python scripts/run_simulation.py
 
 标量二次阻力为 $D=\tfrac12\rho V^2 C_D A$，其中 $V$ 是相对气速。本项目将该模型应用到 X4-950 与 Airbot Play 的 29 个固定几何代理。代理 $j$ 的局部相对气速、逐轴阻力、世界系合力及同态扰动加速度为：
 
-$$
+```math
 \begin{aligned}
-\mathbf u_j(\mathbf w^W)
- &= Q_j^{\mathsf T}\!\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
-    +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
-\mathbf f_{j,0}(\mathbf w^W)
- &= -\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
-      \odot\mathbf u_j\odot|\mathbf u_j|,\\
-\mathbf F_0^W(\mathbf w^W)
- &= R_{WB}\sum_{j=1}^{29}Q_j\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy,0}^W
- &= \frac{P_{xy}}{m}
-    \left[\mathbf F_0^W(\mathbf w^W)-\mathbf F_0^W(\mathbf 0)\right].
+\boldsymbol{u}_j(\boldsymbol{w}^W)
+ &= Q_j^{\mathsf T}\left[R_{WB}^{\mathsf T}(\boldsymbol{v}_O^W-\boldsymbol{w}^W)
+    +\boldsymbol{\omega}^B\times\boldsymbol{r}_j^B\right],\\[4pt]
+\boldsymbol{f}_{j,0}(\boldsymbol{w}^W)
+ &= -\tfrac12\rho\,(\boldsymbol{C}_D\odot\boldsymbol{A}_j)
+      \odot\boldsymbol{u}_j\odot\lvert\boldsymbol{u}_j\rvert.
 \end{aligned}
-$$
+```
 
-$R_{WB}$ 将机体系映射到世界系，$Q_j$ 将代理坐标映射到机体系，$\mathbf r_j^B$ 是根点到代理中心的偏移。$\mathbf A_j$ 为局部三轴参考面积，$\odot$ 与绝对值均按分量计算，$P_{xy}=\mathrm{diag}(1,1,0)$ 保留水平分量。[二次阻力公式](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [项目解析参考](docs/x4-950-reference-v1.md)
+```math
+\begin{aligned}
+\boldsymbol{F}_0^W(\boldsymbol{w}^W)
+ &= R_{WB}\sum\nolimits_{j=1}^{29}Q_j\boldsymbol{f}_{j,0}(\boldsymbol{w}^W),\\[4pt]
+\boldsymbol{y}_{xy,0}^W
+ &= \frac{P_{xy}}{m}
+    \left[\boldsymbol{F}_0^W(\boldsymbol{w}^W)-\boldsymbol{F}_0^W(\boldsymbol{0})\right].
+\end{aligned}
+```
+
+$R_{WB}$ 将机体系映射到世界系，$Q_j$ 将代理坐标映射到机体系，$\boldsymbol{r}_j^B$ 是根点到代理中心的偏移。$\boldsymbol{A}_j$ 为局部三轴参考面积，$\odot$ 与绝对值均按分量计算，$P_{xy}=\mathrm{diag}(1,1,0)$ 保留水平分量。[二次阻力公式](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [项目解析参考](docs/x4-950-reference-v1.md)
 
 | 参数 | 取值与定义 |
 | --- | --- |
 | 空气密度 $\rho$ | 1.225 kg/m³ |
-| 代理阻力系数 $\mathbf C_D$ | $(1,1,1)$，三个局部轴的基准值 |
-| 代理参考面积 $\mathbf A_j$ | 由 X4-950 与 Airbot Play 的 XML 几何导出，各代理采用各自的三轴面积 |
+| 代理阻力系数 $\boldsymbol{C}_D$ | $(1,1,1)$，三个局部轴的基准值 |
+| 代理参考面积 $\boldsymbol{A}_j$ | 由 X4-950 与 Airbot Play 的 XML 几何导出，各代理采用各自的三轴面积 |
 | 整机质量 $m$ | 8.0004 kg |
 | 水平合风速 | 0–10 m/s，竖直分量为零 |
 | 解析参考等效阻力面积 $(C_DA)_{\mathrm{ref}}$ | 约 0.11951 m²，由冻结几何求得 |
@@ -175,17 +180,17 @@ $R_{WB}$ 将机体系映射到世界系，$Q_j$ 将代理坐标映射到机体�
 | 三组阻力倍率 $s_g$ | 机身、机臂及电机、机械臂各从基础分布 $\mathcal U(0.8,1.2)$ 抽取一个倍率，对组内代理的阻力等比例缩放。倍率在同一风过程及有风／无风配对内固定。 |
 | 水平阵风 | 有阵风的过程抽取峰值 $G\sim\mathcal U(0.5,2.0)$ m/s 和周期 $T\sim\mathcal U(2,6)$ s。每个脉冲抽取方向 $\phi_k\sim\mathcal U(0,2\pi)$，向基准风叠加 $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$，其中 $\tau=t\bmod T$。叠加后限制水平合风速至 10 m/s。 |
 
-对每个抽样状态，分别用瞬时来流 $\mathbf w^W(t)$ 和零环境风求解解析力。两分支共享根点速度、姿态、角速度、几何及三组倍率。令 $g(j)$ 表示代理 $j$ 所属的阻力组，随机化后的世界系力与监督标签为：
+对每个抽样状态，分别用瞬时来流 $\boldsymbol{w}^W(t)$ 和零环境风求解解析力。两分支共享根点速度、姿态、角速度、几何及三组倍率。令 $g(j)$ 表示代理 $j$ 所属的阻力组，随机化后的世界系力与监督标签为：
 
-$$
+```math
 \begin{aligned}
-\mathbf F^W(\mathbf w^W;\mathbf s)
- &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy}^W
- &=\frac{P_{xy}}{m}
-   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
+\boldsymbol{F}^W(\boldsymbol{w}^W;\boldsymbol{s})
+ &= R_{WB}\sum\nolimits_{j=1}^{29}Q_j\,s_{g(j)}\,\boldsymbol{f}_{j,0}(\boldsymbol{w}^W),\\[4pt]
+\boldsymbol{y}_{xy}^W
+ &= \frac{P_{xy}}{m}
+   \left[\boldsymbol{F}^W(\boldsymbol{w}^W(t);\boldsymbol{s})-\boldsymbol{F}^W(\boldsymbol{0};\boldsymbol{s})\right].
 \end{aligned}
-$$
+```
 
 每个分支的九维输入由机体系相对气速、角速度和三组倍率组成。归档保存两分支的完整三轴力、各组单位倍率响应和水平加速度增量。训练标签取运行时增益、滤波和限幅前的解析结果。
 
