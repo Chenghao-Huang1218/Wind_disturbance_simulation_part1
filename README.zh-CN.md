@@ -10,13 +10,24 @@ https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 
 [下载原始 MP4（约 66 秒）](docs/media/videos/Wind%20field%20simulation%20Demo.mp4)
 
-| X4-950 + Airbot Play 模型 | 控制面板 |
-| --- | --- |
-| ![Quadrotor and arm in MuJoCo](docs/media/images/MJCF%20model.png) | ![Flight, trajectory and horizontal wind controls](docs/media/images/Control%20UI.png) |
-
-**圆形轨迹跟踪**
-
-<img src="docs/media/images/Motion%20tracking.png" width="420" alt="圆轨迹目标与实际 XY 轨迹示例">
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/MJCF%20model.png"><img src="docs/media/images/MJCF%20model.png" width="400" alt="MuJoCo 中的四旋翼与机械臂"><br>X4-950 + Airbot Play 模型</a>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/Control%20UI.png"><img src="docs/media/images/Control%20UI.png" width="400" alt="飞行、轨迹与水平风设置面板"><br>控制面板</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/wind-field-in-flight.jpg"><img src="docs/media/images/wind-field-in-flight.jpg" width="400" alt="MuJoCo 中飞行的 X4-950 和蓝色风向箭头"><br>空中风场可视化</a>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/Motion%20tracking.png"><img src="docs/media/images/Motion%20tracking.png" width="400" alt="圆轨迹目标与实际 XY 轨迹"><br>圆形轨迹跟踪</a>
+    </td>
+  </tr>
+</table>
 
 灰色虚线为目标轨迹，红线为实际轨迹。
 

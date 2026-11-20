@@ -10,13 +10,24 @@ https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 
 [Download the original MP4 (about 66 seconds)](docs/media/videos/Wind%20field%20simulation%20Demo.mp4)
 
-| X4-950 + Airbot Play model | Interactive control panel |
-| --- | --- |
-| ![Quadrotor and arm in MuJoCo](docs/media/images/MJCF%20model.png) | ![Flight, trajectory and horizontal wind controls](docs/media/images/Control%20UI.png) |
-
-**Circular trajectory tracking**
-
-<img src="docs/media/images/Motion%20tracking.png" width="420" alt="Target and actual XY trajectories">
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/MJCF%20model.png"><img src="docs/media/images/MJCF%20model.png" width="400" alt="Quadrotor and arm in MuJoCo"><br>X4-950 + Airbot Play model</a>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/Control%20UI.png"><img src="docs/media/images/Control%20UI.png" width="400" alt="Flight, trajectory and horizontal wind controls"><br>Control panel</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/wind-field-in-flight.jpg"><img src="docs/media/images/wind-field-in-flight.jpg" width="400" alt="Airborne X4-950 and blue wind direction arrows in MuJoCo"><br>In-flight wind visualization</a>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/media/images/Motion%20tracking.png"><img src="docs/media/images/Motion%20tracking.png" width="400" alt="Target and actual XY trajectories"><br>Circular trajectory tracking</a>
+    </td>
+  </tr>
+</table>
 
 The dashed gray line is the target. The red line is the actual trajectory.
 
