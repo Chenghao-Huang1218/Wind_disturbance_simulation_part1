@@ -4,7 +4,7 @@
 
 Single-UAV wind disturbance simulation in MuJoCo with PX4 SITL, a PINN aerodynamic surrogate, and interactive trajectory control. The aircraft is an X4-950 with an Airbot Play arm.
 
-## Simulation demonstration
+## 1. Simulation demonstration
 
 https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 
@@ -32,14 +32,14 @@ https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 The dashed gray line is the target. The red line is the actual trajectory.
 
 
-## Simulation capabilities
+## 2. Simulation capabilities
 
 - PX4 closed-loop flight with XYZ targets and Figure-8, Ellipse, Circle and Square trajectories.
 - Adjustable, uniform horizontal wind from 0 to 10 m/s with the default backend.
 - A pretrained X4-950 PINN converts wind into additional aerodynamic forces.
 - MuJoCo visualization, a control panel and trajectory comparison plots.
 
-## Project structure
+## 3. Project structure
 
 ~~~text
 Wind_disturbance_simulation_part1/
@@ -76,7 +76,7 @@ Wind_disturbance_simulation_part1/
 
 MuJoCo scene entry: [robot_quadrotor_950_with_arm.xml](src/wind_field_simulation/assets/scenes/default/robot_quadrotor_950_with_arm.xml).
 
-## Installation
+## 4. Installation
 
 Tested on **Ubuntu 24.04 x86-64 / Python 3.12**, with MuJoCo 3.6.0, NumPy 2.4.4, PyTorch 2.11.0 and Matplotlib 3.10.9. The GUI requires Tk and OpenGL.
 
@@ -92,7 +92,7 @@ python -m pip install -e '.[dev]'
 ldd runtime/px4/bin/px4
 ~~~
 
-## Simulation startup
+## 5. Simulation startup
 
 From the repository root, open two terminals.
 
@@ -112,7 +112,7 @@ python scripts/run_simulation.py
 
 The supplied checkpoint and PX4 binary are ready to use; normal operation requires no training or PX4 build.
 
-## Control panel
+## 6. Control panel
 
 1. Wait for **PX4: connected**. Click **Unlock**, wait for **armed**, then click **Takeoff**.
 2. Use **X± / Y± / Z±** for 0.5 m world-frame target increments, or select a trajectory. Circle defaults to a 1 m diameter and a 10 s period.
@@ -128,7 +128,7 @@ The supplied checkpoint and PX4 binary are ready to use; normal operation requir
 
 Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le10$ m/s; positive values mean air moving along the positive world axis. Wind Z and applied force Z are zero. Blue markers show horizontal wind direction.
 
-## Aerodynamic model
+## 7. Aerodynamic model
 
 Each step, the default **pinn-x4** backend (X4 PINN v3) evaluates wind and no-wind inputs at the same aircraft state:
 

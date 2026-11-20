@@ -4,7 +4,7 @@
 
 基于 MuJoCo 与 PX4 SITL 的单无人机风扰动仿真，使用搭载 Airbot Play 机械臂的 X4-950，支持 PINN 气动力预测与交互式轨迹控制。
 
-## 仿真演示
+## 1. 仿真演示
 
 https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 
@@ -32,14 +32,14 @@ https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
 灰色虚线为目标轨迹，红线为实际轨迹。
 
 
-## 仿真功能
+## 2. 仿真功能
 
 - PX4 闭环飞行，支持 XYZ 目标与八字、椭圆、圆形、方形轨迹。
 - 可调的均匀水平风，默认合风速范围 0–10 m/s。
 - 使用预训练 X4-950 PINN，将风输入转换为附加气动力。
 - MuJoCo 场景、控制面板和轨迹对比图。
 
-## 项目结构
+## 3. 项目结构
 
 ~~~text
 Wind_disturbance_simulation_part1/
@@ -76,7 +76,7 @@ Wind_disturbance_simulation_part1/
 
 MuJoCo 主场景入口：[robot_quadrotor_950_with_arm.xml](src/wind_field_simulation/assets/scenes/default/robot_quadrotor_950_with_arm.xml)。
 
-## 安装
+## 4. 安装
 
 验证环境：**Ubuntu 24.04 x86-64 / Python 3.12**，MuJoCo 3.6.0、NumPy 2.4.4、PyTorch 2.11.0、Matplotlib 3.10.9；图形界面需要 Tk 与 OpenGL。
 
@@ -92,7 +92,7 @@ python -m pip install -e '.[dev]'
 ldd runtime/px4/bin/px4
 ~~~
 
-## 仿真启动
+## 5. 仿真启动
 
 在仓库根目录打开两个终端。
 
@@ -112,7 +112,7 @@ python scripts/run_simulation.py
 
 模型权重与 PX4 程序已随仓库提供，正常运行无需重新训练或编译。
 
-## 控制面板
+## 6. 控制面板
 
 1. 等待 **PX4: connected**，点击 **Unlock**，确认 **armed** 后点击 **Takeoff**。
 2. 使用 **X± / Y± / Z±**，按 0.5 m 步长调整世界坐标目标，或选择预设轨迹。圆轨迹默认直径 1 m、周期 10 s。
@@ -149,7 +149,7 @@ v3 使用机体系相对气速、机体系角速度和三组阻力倍率 $\mathb
 
 </details>
 
-## PINN训练数据生成
+## 7. PINN训练数据生成
 
 ### 原始解析模型与关键参数
 
