@@ -128,7 +128,8 @@ The supplied checkpoint and PX4 binary are ready to use; normal operation requir
 
 Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le10$ m/s; positive values mean air moving along the positive world axis. Wind Z and applied force Z are zero. Blue markers show horizontal wind direction.
 
-## 7. Aerodynamic model
+<details>
+<summary>Runtime force application</summary>
 
 Each step, the default **pinn-x4** backend (X4 PINN v3) evaluates wind and no-wind inputs at the same aircraft state:
 
@@ -146,38 +147,31 @@ The default horizontal equivalent drag area is **0.25 m²**. The gain derived at
 
 v3 takes nine inputs: body-frame relative air velocity, body angular rate, and three drag multipliers $\mathbf s$. It combines a quadratic prior and learned residuals per group, then sums the responses with the three multipliers. The bundled v3 defaults to three randomized drag multipliers (±20%, range [0.8, 1.2] each) and horizontal gusts with a 1.5 m/s peak, a 4 s period, and seed 42. The multipliers are drawn once at startup and replay with the same seed. After you click **Apply Wind** and switch wind on, gusts are added to the configured baseline wind. For nominal drag and steady inflow, pass `--drag-variation 0 --gust-amplitude 0`.
 
-### v3 synthetic data generation
+</details>
 
-#### Baseline drag model
+## 7. PINN training data generation
 
-The scalar quadratic drag law is $D=\tfrac12\rho V^2 C_D A$, where $V$ is relative airspeed. The reference model applies this law along each local axis of 29 fixed-geometry proxies. For proxy $j$, the local relative velocity $\mathbf u_j$ and nominal local force $\mathbf f_{j,0}$ are:
+### Baseline analytical model and key parameters
+
+The scalar quadratic drag law is $D=\tfrac12\rho V^2 C_D A$, where $V$ is relative airspeed. The reference applies this law to 29 fixed-geometry proxies for the X4-950 and Airbot Play. For proxy $j$, the equations give local relative airspeed, axis-wise drag, the total world-frame force, and the paired horizontal disturbance acceleration:
 
 $$
 \begin{aligned}
 \mathbf u_j(\mathbf w^W)
- &=Q_j^{\mathsf T}\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
-   +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
+ &= Q_j^{\mathsf T}\!\left[R_{WB}^{\mathsf T}(\mathbf v_O^W-\mathbf w^W)
+    +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
 \mathbf f_{j,0}(\mathbf w^W)
- &=-\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
-     \odot\mathbf u_j\odot|\mathbf u_j|.
+ &= -\tfrac12\rho\,(\mathbf C_D\odot\mathbf A_j)
+      \odot\mathbf u_j\odot|\mathbf u_j|,\\
+\mathbf F_0^W(\mathbf w^W)
+ &= R_{WB}\sum_{j=1}^{29}Q_j\mathbf f_{j,0}(\mathbf w^W),\\
+\mathbf y_{xy,0}^W
+ &= \frac{P_{xy}}{m}
+    \left[\mathbf F_0^W(\mathbf w^W)-\mathbf F_0^W(\mathbf 0)\right].
 \end{aligned}
 $$
 
-$Q_j$ maps the proxy axes to the body frame, $\mathbf r_j^B$ is the offset from the root to the proxy center, and $\mathbf A_j$ contains the three reference areas. Multiplication $\odot$ and absolute value are element-wise. The model sums the proxy forces in world coordinates and subtracts the zero-wind result at the same vehicle state. With the v3 group multipliers $\mathbf s$, the horizontal acceleration label is:
-
-$$
-\begin{aligned}
-\mathbf F^W(\mathbf w^W;\mathbf s)
- &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
-\mathbf y_{xy}^W
- &=\frac{P_{xy}}{m}
-   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
-\end{aligned}
-$$
-
-$g(j)$ identifies the proxy's drag group. Setting $\mathbf s=(1,1,1)$ recovers the fixed-parameter model. Both branches share root velocity, attitude, angular rate, geometry, and multipliers. The dataset stores both full force vectors, the unit-multiplier group responses, and the paired acceleration increment. [Quadratic drag law](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [Project reference model](docs/x4-950-reference-v1.md)
-
-#### Model parameters
+$R_{WB}$ maps body to world, $Q_j$ maps proxy axes to the body frame, and $\mathbf r_j^B$ is the offset from the root to the proxy center. $\mathbf A_j$ contains the three local reference areas, $\odot$ and absolute value act element-wise, and $P_{xy}=\mathrm{diag}(1,1,0)$ retains the horizontal components. [Quadratic drag law](https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/drag-equation/) · [Project reference model](docs/x4-950-reference-v1.md)
 
 | Parameter | Value and definition |
 | --- | --- |
@@ -189,16 +183,32 @@ $g(j)$ identifies the proxy's drag group. Setting $\mathbf s=(1,1,1)$ recovers t
 | Analytical reference drag area $(C_DA)_{\mathrm{ref}}$ | Approximately 0.11951 m² from the frozen geometry |
 | Nominal simulation drag area $(C_DA)_{\mathrm{nom}}$ | 0.25 m² for runtime horizontal force scaling |
 
-The reference drag area is defined for a stationary, level aircraft at zero yaw with a world-frame wind of $(4,4,0)$ m/s, unit drag multipliers, and zero gust amplitude. At this condition, divide the along-wind force by the dynamic pressure $\tfrac12\rho V^2$ to obtain $(C_DA)_{\mathrm{ref}}$. Runtime horizontal increments are scaled by $0.25/0.11951\approx2.0919$, giving a nominal along-wind force of 4.90 N. The synthetic labels precede this scaling, filtering, and clipping.
+The reference drag area is defined for a stationary, level aircraft at zero yaw with a world-frame wind of $(4,4,0)$ m/s, unit drag multipliers, and zero gust amplitude. At this condition, divide the along-wind force by the dynamic pressure $\tfrac12\rho V^2$ to obtain $(C_DA)_{\mathrm{ref}}$. Runtime horizontal increments are scaled by $0.25/0.11951\approx2.0919$, giving a nominal along-wind force of 4.90 N.
 
-#### Randomization and data splits
+### Sample randomization and training data generation
+
+Baseline winds are stratified by speed and direction, with coverage of zero wind, weak wind, and the upper limit. The fixed-geometry analytical model uses grouped drag multipliers and horizontal gusts.
 
 | Random quantity | Sampling and role |
 | --- | --- |
 | Three drag multipliers $s_g$ | One draw per group (frame, booms and motors, manipulator) from a base $\mathcal U(0.8,1.2)$ distribution. Each draw scales the proxy forces in its group and stays fixed for the wind process and both branches of each pair. |
 | Horizontal gusts | Gust-enabled processes draw peak magnitude $G\sim\mathcal U(0.5,2.0)$ m/s and period $T\sim\mathcal U(2,6)$ s. Each pulse draws a direction $\phi_k\sim\mathcal U(0,2\pi)$ and adds $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$ to the baseline wind, where $\tau=t\bmod T$. The horizontal resultant is capped at 10 m/s. |
 
-Baseline winds are stratified by speed and direction, with coverage of zero wind, weak wind, and the upper limit. Each group of ten pairs shares a wind process and multiplier draw. Entire groups go into **30,000 training, 6,000 validation, and 6,000 test pairs**, with seeds **17653, 18659, and 19663**. Training and validation exclude combinations in which all three multipliers differ from 1 by at least 0.12. The test set contains 1,500 pairs in these held-out combinations. All labels are synthetic outputs of the parameterized analytical model. [v3 reproduction and validation](docs/models/x4-950-pinn-wind-randomized-v3.md)
+For each sampled state, evaluate the analytical force at the instantaneous wind $\mathbf w^W(t)$ and at zero environmental wind. The two branches share root velocity, attitude, angular rate, geometry, and all three multipliers. With $g(j)$ denoting proxy $j$'s drag group, the randomized world-frame force and the training label are:
+
+$$
+\begin{aligned}
+\mathbf F^W(\mathbf w^W;\mathbf s)
+ &= R_{WB}\sum_{j=1}^{29}Q_j\,s_{g(j)}\,\mathbf f_{j,0}(\mathbf w^W),\\
+\mathbf y_{xy}^W
+ &=\frac{P_{xy}}{m}
+   \left[\mathbf F^W(\mathbf w^W(t);\mathbf s)-\mathbf F^W(\mathbf 0;\mathbf s)\right].
+\end{aligned}
+$$
+
+Each branch has nine inputs: body-frame relative airspeed, angular velocity, and the three group multipliers. The dataset stores both full force vectors, each group's unit-multiplier response, and the paired horizontal acceleration increment. Labels are computed before runtime scaling, filtering, and clipping.
+
+Each group of ten pairs shares a wind process and multiplier draw. The split is **30,000 training, 6,000 validation, and 6,000 test pairs**, with seeds **17653, 18659, and 19663**. Training and validation exclude combinations where all three multipliers differ from 1 by at least 0.12. The test set contains 1,500 pairs from these held-out combinations. [v3 reproduction and validation](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 <details>
 <summary>Validation and reproducibility</summary>
