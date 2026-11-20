@@ -6,14 +6,19 @@ Single-UAV wind disturbance simulation in MuJoCo with PX4 SITL, a PINN aerodynam
 
 ## Demo
 
+https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
+
+[Download the original MP4 (about 66 seconds)](docs/media/videos/Wind%20field%20simulation%20Demo.mp4)
+
 | X4-950 + Airbot Play model | Interactive control panel |
 | --- | --- |
 | ![Quadrotor and arm in MuJoCo](docs/media/images/MJCF%20model.png) | ![Flight, trajectory and horizontal wind controls](docs/media/images/Control%20UI.png) |
 
-| Demo video (animated preview) | Circular trajectory tracking example |
-| --- | --- |
-| [<img src="docs/media/videos/wind-field-simulation-preview.gif" width="420" alt="Animated wind simulation preview; click for the full MP4">](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | <img src="docs/media/images/Motion%20tracking.png" width="420" alt="Example target and actual XY trajectories"> |
-| [Watch / download the full MP4 (approximately 66 seconds, 20.6 MB)](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | Dashed gray: target; red: actual trajectory |
+**Circular trajectory tracking**
+
+<img src="docs/media/images/Motion%20tracking.png" width="420" alt="Target and actual XY trajectories">
+
+The dashed gray line is the target. The red line is the actual trajectory.
 
 
 ## Features

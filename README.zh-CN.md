@@ -6,14 +6,19 @@
 
 ## 演示
 
+https://github.com/user-attachments/assets/5404e7aa-410a-489f-a724-ee3c1227da1d
+
+[下载原始 MP4（约 66 秒）](docs/media/videos/Wind%20field%20simulation%20Demo.mp4)
+
 | X4-950 + Airbot Play 模型 | 控制面板 |
 | --- | --- |
 | ![Quadrotor and arm in MuJoCo](docs/media/images/MJCF%20model.png) | ![Flight, trajectory and horizontal wind controls](docs/media/images/Control%20UI.png) |
 
-| 演示视频（动态预览） | 圆形轨迹跟踪 |
-| --- | --- |
-| [<img src="docs/media/videos/wind-field-simulation-preview.gif" width="420" alt="Animated wind simulation preview; click for the full MP4">](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | <img src="docs/media/images/Motion%20tracking.png" width="420" alt="Example target and actual XY trajectories"> |
-| [播放 / 下载完整 MP4（约 66 秒，20.6 MB）](docs/media/videos/Wind%20field%20simulation%20Demo.mp4) | 灰色虚线：目标；红色：实际轨迹 |
+**圆形轨迹跟踪**
+
+<img src="docs/media/images/Motion%20tracking.png" width="420" alt="圆轨迹目标与实际 XY 轨迹示例">
+
+灰色虚线为目标轨迹，红线为实际轨迹。
 
 
 ## 功能
