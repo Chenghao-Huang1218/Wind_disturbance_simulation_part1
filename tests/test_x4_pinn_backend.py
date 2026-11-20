@@ -112,7 +112,9 @@ def test_cli_default_x4_and_backend_specific_paths(
     default = simulation.parse_config([])
     assert default.wind_backend == "pinn-x4"
     assert default.pinn_checkpoint == simulation.default_x4_pinn_checkpoint()
-    assert default.reference_config == default.pinn_checkpoint.with_name("reference_config.json")
+    assert default.pinn_checkpoint.parent.name == "x4_950_wind_randomized_v3"
+    assert default.reference_config.parent.name == "x4_950_wind_10_v2"
+    assert default.reference_config.is_file()
     assert default.pinn_checkpoint.is_relative_to(simulation.default_pinn_checkpoint_dir())
     assert default.pinn_checkpoint.is_file()
     legacy = simulation.parse_config(["--wind-backend", "pinn"])
@@ -143,8 +145,10 @@ def test_no_argument_app_loads_bundled_x4_and_preserves_apply_gate(
     try:
         assert isinstance(app.pinn_predictor, X4PinnWindResidualModel)
         assert app.pinn_predictor.checkpoint_sha256 == (
-            "43c44e6b7ea509d0e54206aad8678cd8b5384aa69171ca77f9b89e278b8f89ba")
+            "37124dd930a990cef6bd8baa3137d72f2df28a771a113847d844e8574b32891c")
         assert app.wind_max_horizontal_m_s == 10.0
+        assert tuple(app.pinn_predictor.drag_group_scales.values()) == (1., 1., 1.)
+        assert app.wind_gust is None
         assert app.wind_field is None
         app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
         assert not app.flight_control.wind_enabled
@@ -282,9 +286,7 @@ def test_bundled_wide_drag_area_sets_applied_force(
     log = tmp_path / "run.jsonl"
     flags = ["--no-viewer", "--run-log", str(log)]
     if backend == "analytic":
-        reference = simulation.default_x4_pinn_checkpoint().with_name(
-            "reference_config.json"
-        )
+        reference = simulation.default_wide_wind_reference_config()
         flags += ["--wind-backend", backend, "--reference-config", str(reference)]
     app = simulation.WindSimulationApp(
         simulation.parse_config(flags), bridge=RecordingBridge(),

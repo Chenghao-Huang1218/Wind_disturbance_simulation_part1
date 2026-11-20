@@ -52,11 +52,14 @@ from .run_logging import WindRunLogger
 from .training.reference_aerodynamics import (
     INSPECTION_STATE_DOMAIN,
     LEGACY_WIND_MAX_M_S,
+    WIDE_WIND_MAX_M_S,
     reference_wind_limit,
 )
+from .wind_randomization import draw_drag_scales
 from .wind_backends import (
     X4_WIDE_WIND_CDA_M2,
     AnalyticalWindResidualModel,
+    HorizontalGust,
     X4PinnWindResidualModel,
     reference_horizontal_drag_area_m2,
 )
@@ -109,8 +112,18 @@ def default_pinn_checkpoint_dir() -> Path:
 
 
 def default_x4_pinn_checkpoint() -> Path:
-    """Return the bundled X4 v2 checkpoint for 0–10 m/s horizontal wind."""
+    """Return the default nine-input X4 checkpoint for 0–10 m/s wind."""
+    return default_pinn_checkpoint_dir() / "x4_950_wind_randomized_v3" / "candidate.pt"
+
+
+def bundled_x4_v2_checkpoint() -> Path:
+    """Return the bundled six-input X4 checkpoint for explicit comparisons."""
     return default_pinn_checkpoint_dir() / "x4_950_wind_10_v2" / "candidate.pt"
+
+
+def default_wide_wind_reference_config() -> Path:
+    """Return the same frozen 0–10 m/s reference used by X4 v2 and v3."""
+    return bundled_x4_v2_checkpoint().with_name("reference_config.json")
 
 
 def default_wind_reference_config() -> Path:
@@ -2480,19 +2493,42 @@ class SimulationConfig:
     pinn_checkpoint: Path | None = None
     target_system: int = 1
     circle_duration_s: float | None = None
+    drag_variation: float = 0.0
+    gust_amplitude_m_s: float = 0.0
+    gust_period_s: float = 4.0
+    wind_seed: int = 42
+
+    @property
+    def analytic_wind_experiment(self) -> bool:
+        """Report whether either optional disturbance is enabled."""
+        return self.drag_variation > 0 or self.gust_amplitude_m_s > 0
 
     def __post_init__(self) -> None:
         """Validates numeric and path configuration."""
         if self.wind_backend not in ("pinn", "analytic", "pinn-x4"):
             raise ValueError("wind_backend must be pinn, analytic or pinn-x4")
+        if not 0 <= self.drag_variation < 1:
+            raise ValueError("--drag-variation must be in [0, 1)")
+        if not 0 <= self.gust_amplitude_m_s <= WIDE_WIND_MAX_M_S:
+            raise ValueError("--gust-amplitude must be in [0, 10] m/s")
+        if not np.isfinite(self.gust_period_s) or self.gust_period_s < 0.1:
+            raise ValueError("--gust-period must be at least 0.1 s")
+        if self.wind_seed < 0:
+            raise ValueError("--wind-seed must be nonnegative")
+        if self.analytic_wind_experiment and self.wind_backend == "pinn":
+            raise ValueError("Drag variation and gusts require analytic or pinn-x4")
         if self.wind_backend == "analytic" and self.reference_config is None:
-            object.__setattr__(self, "reference_config", default_wind_reference_config())
+            reference = (
+                default_wide_wind_reference_config()
+                if self.analytic_wind_experiment else default_wind_reference_config()
+            )
+            object.__setattr__(self, "reference_config", reference)
         if self.wind_backend == "pinn" and self.reference_config is not None:
             raise ValueError("--reference-config requires analytic or pinn-x4 backend")
         if self.wind_backend == "pinn-x4" and self.pinn_checkpoint is None:
             object.__setattr__(self, "pinn_checkpoint", default_x4_pinn_checkpoint())
         if self.wind_backend == "pinn-x4" and self.reference_config is None:
-            reference = default_x4_pinn_checkpoint().with_name("reference_config.json")
+            reference = default_wide_wind_reference_config()
             object.__setattr__(self, "reference_config", reference)
         if self.wind_backend != "pinn-x4" and self.pinn_checkpoint is not None:
             raise ValueError("--pinn-checkpoint requires pinn-x4 backend")
@@ -2561,7 +2597,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--takeoff-height", type=float, default=1.0)
     parser.add_argument(
         "--wind-backend", choices=("pinn", "analytic", "pinn-x4"), default="pinn-x4",
-        help="Default: bundled 0–10 m/s pinn-x4. Explicit fallbacks: analytic or legacy pinn.",
+        help="Default: bundled 0–10 m/s X4 PINN v3. Explicit fallbacks: analytic or legacy pinn.",
     )
     parser.add_argument(
         "--reference-config", type=Path,
@@ -2574,6 +2610,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run-log", type=Path,
         help="Optional new JSONL path for 50 Hz comparison observations.",
+    )
+    parser.add_argument(
+        "--drag-variation", type=float, default=0.0,
+        help="Per-group drag half-width. Applied by analytic and X4 v3; v2 is nominal.",
+    )
+    parser.add_argument(
+        "--gust-amplitude", type=float, default=0.0,
+        help="Disturbance experiment: peak horizontal gust magnitude in m/s.",
+    )
+    parser.add_argument(
+        "--gust-period", type=float, default=4.0,
+        help="Simulation seconds per gust pulse (default: 4).",
+    )
+    parser.add_argument(
+        "--wind-seed", type=int, default=42,
+        help="Seed for the run's drag and gust draws (default: 42).",
     )
     for axis in ("x", "y"):
         parser.add_argument(
@@ -2629,6 +2681,10 @@ def parse_config(argv: Sequence[str] | None = None) -> SimulationConfig:
         run_log=args.run_log.resolve() if args.run_log else None,
         pinn_checkpoint=(args.pinn_checkpoint.resolve() if args.pinn_checkpoint else None),
         target_system=args.target_system,
+        drag_variation=args.drag_variation,
+        gust_amplitude_m_s=args.gust_amplitude,
+        gust_period_s=args.gust_period,
+        wind_seed=args.wind_seed,
     )
 
 
@@ -2789,22 +2845,35 @@ class WindSimulationApp:
             self.pinn_predictor = pinn_predictor
         elif config.wind_backend == "analytic":
             self.pinn_predictor = AnalyticalWindResidualModel(
-                config.reference_config, config.xml_path, self.model)
+                config.reference_config, config.xml_path, self.model,
+                drag_variation=config.drag_variation, wind_seed=config.wind_seed,
+            )
         elif config.wind_backend == "pinn-x4":
             self.pinn_predictor = X4PinnWindResidualModel(
                 config.pinn_checkpoint, config.reference_config, config.xml_path,
-                self.model)
+                self.model, drag_variation=config.drag_variation, wind_seed=config.wind_seed,
+            )
         else:
             self.pinn_predictor = PinnWindResidualModel()
         self.wind_max_horizontal_m_s = getattr(
             self.pinn_predictor, "wind_max_horizontal_m_s", LEGACY_WIND_MAX_M_S,
         )
+        if config.analytic_wind_experiment and self.wind_max_horizontal_m_s != WIDE_WIND_MAX_M_S:
+            raise ValueError("Disturbance experiments require a 0–10 m/s reference")
+        self.wind_gust = (
+            HorizontalGust(config.gust_amplitude_m_s, config.gust_period_s, config.wind_seed)
+            if config.gust_amplitude_m_s > 0 else None
+        )
+        self._gust_start_s: float | None = None
         self.wind_cda_m2: float | None = None
         self.wind_drag_scale = 1.0
-        bundled_wide_reference = default_x4_pinn_checkpoint().with_name(
-            "reference_config.json"
-        )
-        if pinn_predictor is None and config.reference_config == bundled_wide_reference:
+        bundled_wide_reference = default_wide_wind_reference_config()
+        if pinn_predictor is None and (
+            config.reference_config == bundled_wide_reference
+            or config.analytic_wind_experiment
+            or (config.wind_backend == "pinn-x4"
+                and self.pinn_predictor.drag_group_scales)
+        ):
             self.wind_cda_m2 = X4_WIDE_WIND_CDA_M2
             reference_area = reference_horizontal_drag_area_m2(
                 self.pinn_predictor.reference,
@@ -2869,8 +2938,13 @@ class WindSimulationApp:
               "XY EMA/limit unchanged.",
               flush=True)
         if self.wind_cda_m2 is not None:
-            print(f"Wind CdA: {self.wind_cda_m2:g} m² at [4, 4, 0] m/s; "
+            print(f"Wind CdA: {self.wind_cda_m2:g} m² nominal at [4, 4, 0] m/s; "
                   f"XY gain: {self.wind_drag_scale:.4f}.", flush=True)
+        if config.analytic_wind_experiment:
+            drag_scales = getattr(self.pinn_predictor, "drag_group_scales", {})
+            print(f"Wind experiment: seed={config.wind_seed}, "
+                  f"drag scales={drag_scales}, gust={config.gust_amplitude_m_s:g} m/s "
+                  f"over {config.gust_period_s:g} s per pulse.", flush=True)
         if pinn_predictor is None and config.wind_backend in ("analytic", "pinn-x4"):
             print("Frozen reference: "
                   f"{self.pinn_predictor.reference_sha256}; "
@@ -2946,13 +3020,13 @@ class WindSimulationApp:
         if self.config.reference_config is not None and not predictor_overridden:
             files.append(self.config.reference_config)
             files.extend(Path(__file__).parent / name for name in (
-                "wind_backends.py", "training/reference_aerodynamics.py",
+                "wind_backends.py", "wind_randomization.py", "training/reference_aerodynamics.py",
                 "training/xml_parameters.py",
             ))
             if self.config.pinn_checkpoint is not None:
                 files.append(self.config.pinn_checkpoint)
                 files.extend(Path(__file__).parent / name for name in (
-                    "training/model_v1.py", "training/sampling.py",
+                    "training/model_v1.py", "training/model_v3.py", "training/sampling.py",
                     "training/dataset_v1.py",
                 ))
         elif not predictor_overridden:
@@ -2984,6 +3058,15 @@ class WindSimulationApp:
             "wind_max_m_s": self.wind_max_horizontal_m_s,
             "wind_cda_m2": self.wind_cda_m2,
             "wind_drag_scale": self.wind_drag_scale,
+            "wind_seed": self.config.wind_seed,
+            "drag_variation": self.config.drag_variation,
+            "drag_group_scales": getattr(self.pinn_predictor, "drag_group_scales", {}),
+            "experiment_drag_group_scales": (
+                draw_drag_scales(self.config.drag_variation, self.config.wind_seed)
+                if self.config.analytic_wind_experiment else {}
+            ),
+            "gust_amplitude_m_s": self.config.gust_amplitude_m_s,
+            "gust_period_s": self.config.gust_period_s,
             "inspection_state_domain": INSPECTION_STATE_DOMAIN,
             "takeoff_height_m": self.config.takeoff_height_m,
             "trajectory_size_m": self.config.trajectory_size_m,
@@ -3032,6 +3115,10 @@ class WindSimulationApp:
                 if self.wind_field is not None else None
             ),
             "active_wind_world_m_s": self.last_active_wind.tolist(),
+            "gust_elapsed_s": (
+                float(self.data.time) - self._gust_start_s
+                if self._gust_start_s is not None else None
+            ),
             "raw_acceleration_world_m_s2": (
                 self.last_raw_residual_acceleration.tolist()
             ),
@@ -3287,6 +3374,15 @@ class WindSimulationApp:
             self.wind_field.velocity(wind_enabled)
             if self.wind_field is not None else np.zeros(3, dtype=np.float64)
         )
+        if not wind_enabled:
+            self._gust_start_s = None
+        elif self.wind_gust is not None:
+            now = float(self.data.time)
+            if self._gust_start_s is None:
+                self._gust_start_s = now
+            active_wind = self.wind_gust.velocity(
+                active_wind, now - self._gust_start_s, self.wind_max_horizontal_m_s,
+            )
         relative_velocity = velocity - active_wind
 
         if not wind_enabled:

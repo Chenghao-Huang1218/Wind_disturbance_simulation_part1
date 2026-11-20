@@ -114,13 +114,13 @@ Wind inputs start empty. The resultant speed must satisfy $\sqrt{w_x^2+w_y^2}\le
 
 ## Model
 
-Each step, the default **pinn-x4** backend evaluates wind and no-wind inputs at the same aircraft state:
+Each step, the default **pinn-x4** backend (X4 PINN v3) evaluates wind and no-wind inputs at the same aircraft state:
 
 $$
 \mathbf a_{\mathrm{wind}}^W
 =P_{xy}R_{WB}\bigl[
-g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B)
--g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B)
+g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B,\mathbf s)
+-g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B,\mathbf s)
 \bigr].
 $$
 
@@ -128,7 +128,35 @@ $R_{WB}$ maps body to world, $\mathbf v_O^W$ is root-point velocity, $\mathbf w^
 
 The default horizontal equivalent drag area is **0.25 m²**. The gain derived at the reference condition scales the world-frame XY acceleration before it passes through an EMA ($\alpha=0.05$), per-axis clipping at ±6 m/s², and multiplication by the 8.0004 kg aircraft mass before application to the root body.
 
-The surrogate combines a quadratic-drag prior with a **6→64→64→3 Tanh residual network**. The earlier v1 pilot uses **3,000 paired synthetic samples** from 29 component drag proxies extracted from model XML. Sampling/training seeds are 7/42. This simplified reference model has no real-aircraft aerodynamic calibration.
+v3 takes nine inputs: body-frame relative air velocity, body angular rate, and three drag multipliers $\mathbf s$. It combines a quadratic prior and learned residuals per group, then sums the responses with the three multipliers. The defaults are unit multipliers and zero gust amplitude. Enable the disturbances with `--drag-variation 0.20 --gust-amplitude 1.5 --gust-period 4 --wind-seed 42`.
+
+### How the PINN v3 dataset is generated
+
+The synthetic labels come from 29 fixed geometric proxies extracted from the X4-950 and Airbot Play XML files. Each sampled state is evaluated twice with the same root velocity, attitude, angular rate, geometry, and drag multipliers. The wind branch uses the instantaneous inflow $\mathbf w^W(t)$ and the other branch sets environmental wind to zero. For proxy $j$, the model first resolves the local relative air velocity and then computes axis-wise quadratic drag:
+
+$$
+\begin{aligned}
+\mathbf u_j(\mathbf w)
+&=Q_j^\mathsf{T}\!\left[R_{WB}^\mathsf{T}(\mathbf v_O^W-\mathbf w^W)
+                          +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
+\mathbf f_j(\mathbf w)
+&=-\tfrac12\rho\,s_{g(j)}\,(\mathbf C_D\odot\mathbf A_j)
+                   \odot\mathbf u_j(\mathbf w)\odot|\mathbf u_j(\mathbf w)|,\\
+\mathbf F^W(\mathbf w)&=R_{WB}\sum_j Q_j\mathbf f_j(\mathbf w),\\
+\mathbf y_{xy}^W&=P_{xy}\,[\mathbf F^W(\mathbf w(t))-\mathbf F^W(\mathbf 0)]/m .
+\end{aligned}
+$$
+
+$Q_j$ maps proxy axes to body axes, $\mathbf r_j^B$ is the offset from the root to the proxy center, and $\mathbf A_j$ contains its three reference areas. The operator $\odot$ denotes element-wise multiplication. The dataset stores complete force vectors for both branches, each group's unit-multiplier response, and the paired horizontal acceleration increment. Labels precede the nominal $C_DA=0.25\,\mathrm{m^2}$ runtime scaling, filtering, and clipping.
+
+The fixed-parameter formula gains two sources of randomization:
+
+| Random quantity | Sampling and role in the formula |
+| --- | --- |
+| Three drag multipliers $s_{g(j)}$ | One draw per group (frame, booms and motors, manipulator) from a base $\mathcal U(0.8,1.2)$ distribution. The multiplier scales $C_D A$ for every proxy in its group and stays fixed across a wind process and both branches of each pair. |
+| Horizontal gusts | Gust-enabled processes draw peak magnitude $G\sim\mathcal U(0.5,2.0)$ m/s and pulse period $T\sim\mathcal U(2,6)$ s. Each pulse draws its own direction $\phi_k\sim\mathcal U(0,2\pi)$. At time $\tau=t\bmod T$ within the pulse, add $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$ to the baseline wind and cap the horizontal resultant at 10 m/s. |
+
+Density $\rho=1.225\,\mathrm{kg/m^3}$, nominal axis coefficients $C_D=1$, proxy geometry, and mass stay fixed. States and baseline wind are sampled with coverage for zero wind, weak wind, and the 10 m/s boundary. Each group of ten pairs shares a wind process and a multiplier draw. Entire groups go into **30,000 training, 6,000 validation, and 6,000 test pairs**, with seeds **17653, 18659, and 19663**. Training and validation exclude corners where all three multipliers differ from one by at least 0.12. The test reserves 1,500 pairs in those corners. The labels represent the parameterized analytical model. [v3 reproduction commands and validation results](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 <details>
 <summary>PINN training plot and technical reports</summary>
@@ -136,7 +164,7 @@ The surrogate combines a quadratic-drag prior with a **6→64→64→3 Tanh resi
 ![PINN pilot training and holdout errors](docs/figures/x4-950-pinn-pilot-v1.png)
 
 - [Reference model](docs/x4-950-reference-v1.md)
-- [Default wide-range model and reproduction](docs/models/x4-950-pinn-wind-10-v2.md)
+- [v2 wide-range baseline and reproduction](docs/models/x4-950-pinn-wind-10-v2.md)
 - [v1 model card](docs/models/x4-950-pinn-pilot-v1.md)
 - [Pilot training report](docs/X4_PINN_PILOT_2026-11-10.md)
 - [SITL integration report](docs/X4_PINN_INTEGRATION_2026-11-10.md)

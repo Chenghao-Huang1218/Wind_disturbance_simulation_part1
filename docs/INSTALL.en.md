@@ -141,7 +141,7 @@ source .venv/bin/activate
 python scripts/run_simulation.py
 ```
 
-The default is the bundled 0–10 m/s `pinn-x4`. To select the 0–3 m/s analytical
+The default is the bundled 0–10 m/s X4 PINN v3 (`pinn-x4`). To select the 0–3 m/s analytical
 or legacy PINN option, replace the last command in terminal 2.
 
 ```bash

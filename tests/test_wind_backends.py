@@ -50,6 +50,100 @@ def test_predictor_matches_independent_paired_force(bundle: Path) -> None:
     np.testing.assert_array_equal(predictor.predict(**state), np.zeros(3))
 
 
+def test_analytic_drag_randomization_preserves_nominal_calibration() -> None:
+    """Randomized coefficients are fixed for a run and reuse the nominal gain."""
+    config = simulation.parse_config([
+        "--wind-backend", "analytic", "--drag-variation", "0.2", "--wind-seed", "42",
+    ])
+    app = simulation.WindSimulationApp(config, bridge=RecordingBridge())
+    replay = simulation.WindSimulationApp(config, bridge=RecordingBridge())
+    try:
+        assert app.wind_cda_m2 == 0.25
+        assert app.wind_max_horizontal_m_s == 10
+        wind = np.array([4., 4., 0.])
+        direction = wind / np.linalg.norm(wind)
+        predictor = app.pinn_predictor
+        assert app.wind_drag_scale * simulation.reference_horizontal_drag_area_m2(
+            predictor.reference,
+        ) == pytest.approx(0.25)
+        assert predictor.drag_group_scales == replay.pinn_predictor.drag_group_scales
+        assert set(predictor.drag_group_scales) == {"frame", "booms_and_motors", "arm"}
+        assert all(0.8 <= scale <= 1.2 for scale in predictor.drag_group_scales.values())
+        state = ([0, 0, 0], [1, 0, 0, 0], [0, 0, 0])
+        force = predictor.predict(*state, wind) * app.bindings.uav_mass_kg * app.wind_drag_scale
+        assert force @ direction != pytest.approx(4.9)
+        np.testing.assert_array_equal(
+            predictor.predict(*state, wind), replay.pinn_predictor.predict(*state, wind),
+        )
+        np.testing.assert_array_equal(predictor.predict(*state, [0, 0, 0]), [0, 0, 0])
+    finally:
+        app._close_runtime()
+        replay._close_runtime()
+
+
+def test_analytic_gust_changes_applied_force_and_respects_wind_gate(tmp_path: Path) -> None:
+    """Exercise the normal Apply/On/Off path with a seeded pulse."""
+    log = tmp_path / "gust.jsonl"
+    config = simulation.parse_config([
+        "--wind-backend", "analytic", "--gust-amplitude", "1.5", "--gust-period", "4",
+        "--wind-seed", "42", "--run-log", str(log),
+    ])
+    app = simulation.WindSimulationApp(config, bridge=RecordingBridge())
+    try:
+        base = np.array([4., 4., 0.])
+        app._process_ui_command(
+            simulation.UiCommand(simulation.UiCommandType.SET_WIND, base),
+        )
+        np.testing.assert_array_equal(app._apply_wind_force()[2], [0, 0, 0])
+        app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
+        app.data.time = 8.
+        at_start, _, nominal_force = app._apply_wind_force()
+        np.testing.assert_array_equal(at_start, base)
+        app.residual_filter.reset()
+        app.data.time = 10.
+        peak, _, gust_force = app._apply_wind_force()
+        assert np.linalg.norm(peak - base) == pytest.approx(1.5)
+        replay = simulation.HorizontalGust(1.5, 4, 42)
+        np.testing.assert_array_equal(peak, replay.velocity(base, 2.0, 10.0))
+        different_seed = simulation.HorizontalGust(1.5, 4, 43)
+        assert not np.allclose(peak, different_seed.velocity(base, 2.0, 10.0))
+        assert peak[2] == gust_force[2] == 0
+        assert not np.allclose(gust_force, nominal_force)
+        app.data.time = 12.
+        np.testing.assert_array_equal(app._apply_wind_force()[0], base)
+        next_gust = replay.velocity(np.zeros(3), 6.0, 10.0)
+        near_limit = 9.9 * next_gust / np.linalg.norm(next_gust)
+        app._process_ui_command(
+            simulation.UiCommand(simulation.UiCommandType.SET_WIND, near_limit),
+        )
+        app.data.time = 14.
+        bounded_wind = app._apply_wind_force()[0]
+        assert np.linalg.norm(bounded_wind) <= 10.0
+        assert np.linalg.norm(bounded_wind) == pytest.approx(10.0)
+        app._process_ui_command(simulation.UiCommand(simulation.UiCommandType.TOGGLE_WIND))
+        active, _, force = app._apply_wind_force()
+        np.testing.assert_array_equal(active, [0, 0, 0])
+        np.testing.assert_array_equal(force, [0, 0, 0])
+    finally:
+        app._close_runtime()
+    metadata = json.loads(log.read_text().splitlines()[0])
+    assert metadata["wind_seed"] == 42
+    assert metadata["gust_amplitude_m_s"] == 1.5
+    assert metadata["gust_period_s"] == 4.0
+
+
+@pytest.mark.parametrize("flags", [
+    ["--wind-backend", "pinn", "--gust-amplitude", "1"],
+    ["--wind-backend", "analytic", "--drag-variation", "1"],
+    ["--wind-backend", "analytic", "--gust-amplitude", "nan"],
+    ["--wind-backend", "analytic", "--gust-amplitude", "1", "--gust-period", "0"],
+    ["--wind-backend", "analytic", "--drag-variation", "0.2", "--wind-seed", "-1"],
+])
+def test_invalid_analytic_perturbation_settings_are_rejected(flags: list[str]) -> None:
+    with pytest.raises(ValueError):
+        simulation.parse_config(flags)
+
+
 @pytest.mark.parametrize("wind", [[3, 3, 0], [0, 0, 0.1], [3.001, 0, 0]])
 def test_predictor_rejects_invalid_wind(bundle: Path, wind: list[float]) -> None:
     with pytest.raises(ValueError):

@@ -131,7 +131,7 @@ source .venv/bin/activate
 python scripts/run_simulation.py
 ```
 
-默认加载打包的 0–10 m/s 宽域 `pinn-x4`。显式选择 0–3 m/s 解析或旧 PINN 时，仅替换终端二最后一行。
+默认加载打包的 0–10 m/s X4 PINN v3（`pinn-x4`）。显式选择 0–3 m/s 解析或旧 PINN 时，仅替换终端二最后一行。
 
 ```bash
 python scripts/run_simulation.py --wind-backend analytic

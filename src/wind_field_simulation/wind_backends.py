@@ -12,6 +12,11 @@ from numpy.typing import NDArray
 from .training.reference_aerodynamics import paired_wind_labels, reference_wind_limit
 from .training.dataset_v1 import file_sha256
 from .training.model_v1 import load_checkpoint, predict_increment
+from .training.model_v3 import (
+    KIND as RANDOMIZED_KIND, MAX_TRAINED_VARIATION, FixedDragWindAero,
+    load_randomized_checkpoint,
+)
+from .wind_randomization import draw_drag_scales, with_drag_scales
 from .training.sampling import body_to_world_rotation
 from .training.xml_parameters import load_reference_bundle
 
@@ -42,6 +47,7 @@ class AnalyticalWindResidualModel:
 
     def __init__(
         self, reference_path: Path, xml_path: Path, model: mujoco.MjModel,
+        *, drag_variation: float = 0.0, wind_seed: int = 42,
     ) -> None:
         """Validate the frozen bundle against the compiled runtime assembly.
 
@@ -49,6 +55,8 @@ class AnalyticalWindResidualModel:
             reference_path: Exported, fingerprinted reference_config.json.
             xml_path: Actual scene used by the application.
             model: Already compiled runtime model, checked without mutation.
+            drag_variation: Fractional half-width of each group's drag multiplier.
+            wind_seed: Seed for the fixed drag draw for this run.
         """
         self.reference = load_reference_bundle(reference_path, xml_path)
         self.reference_sha256 = self.reference["reference_sha256"]
@@ -69,6 +77,11 @@ class AnalyticalWindResidualModel:
                 raise ValueError("Runtime model initial joints differ")
         if model.opt.density != 0 or model.opt.viscosity != 0:
             raise ValueError("Runtime fluid forces must stay disabled")
+        self.drag_group_scales: dict[str, float] = {}
+        self._evaluation_reference = self.reference
+        if drag_variation:
+            self.drag_group_scales = draw_drag_scales(drag_variation, wind_seed)
+            self._evaluation_reference = with_drag_scales(self.reference, self.drag_group_scales)
         # Validate proxy arrays and physical assumptions before connecting PX4.
         self.predict([0, 0, 0], [1, 0, 0, 0], [0, 0, 0], [0, 0, 0])
 
@@ -102,16 +115,58 @@ class AnalyticalWindResidualModel:
                 raise ValueError(f"{name} must have shape ({size},)")
         paired = paired_wind_labels(
             velocity_world, quaternion_wxyz, angular_velocity_body,
-            wind_world, self.reference,
+            wind_world, self._evaluation_reference,
         )
         return paired["delta_force_world_n"] / self.mass_total_kg
+
+
+class HorizontalGust:
+    """Seeded horizontal pulses with a raised-cosine envelope.
+
+    Args:
+        amplitude_m_s: Peak magnitude of each gust before wind-domain limiting.
+        period_s: Simulation seconds per pulse.
+        seed: Experiment seed, independent of the drag-parameter draw.
+    """
+
+    def __init__(self, amplitude_m_s: float, period_s: float, seed: int) -> None:
+        self.amplitude_m_s = amplitude_m_s
+        self.period_s = period_s
+        self.seed = seed
+        self._pulse = -1
+        self._peak_xy = np.zeros(2, dtype=np.float64)
+
+    def velocity(
+        self, base_wind: FloatArray, elapsed_s: float, wind_limit_m_s: float,
+    ) -> FloatArray:
+        """Return the horizontal sum of the baseline and the current pulse.
+
+        Args:
+            base_wind: Accepted world-frame wind vector, m/s.
+            elapsed_s: Simulation time since the wind was enabled.
+            wind_limit_m_s: Maximum resultant horizontal wind, m/s.
+
+        Returns:
+            World-frame wind with a bounded horizontal resultant and zero Z.
+        """
+        pulse, offset = divmod(max(0.0, elapsed_s), self.period_s)
+        if pulse != self._pulse:
+            self._pulse = int(pulse)
+            angle = np.random.default_rng([self.seed, 1, self._pulse]).uniform(0, 2 * np.pi)
+            self._peak_xy = self.amplitude_m_s * np.array([np.cos(angle), np.sin(angle)])
+        wind = base_wind.copy()
+        wind[:2] += self._peak_xy * np.sin(np.pi * offset / self.period_s) ** 2
+        speed = np.hypot(*wind[:2])
+        if speed > wind_limit_m_s:
+            wind[:2] *= np.nextafter(wind_limit_m_s, 0.0) / speed
+        return wind
 
 
 class X4PinnWindResidualModel:
     """Validated CPU surrogate adapter for versioned X4 models.
 
     Args:
-        checkpoint_path: The six-dimensional X4 candidate.
+        checkpoint_path: An X4 v1, v2 or v3 candidate.
         reference_path: Frozen reference bundle used for the candidate labels.
         xml_path: Actual scene used by the app.
         model: Compiled runtime model, checked without modifying its state.
@@ -120,11 +175,22 @@ class X4PinnWindResidualModel:
     def __init__(
         self, checkpoint_path: Path, reference_path: Path,
         xml_path: Path, model: mujoco.MjModel,
+        *, drag_variation: float = 0.0, wind_seed: int = 42,
     ) -> None:
         # Reuse the same XML closure, mass, initial joints and fluid checks as
         # the analytic runtime. No reference force is added during inference.
         validated = AnalyticalWindResidualModel(reference_path, xml_path, model)
-        self.network, metadata = load_checkpoint(checkpoint_path)
+        metadata = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        self.drag_group_scales: dict[str, float] = {}
+        if isinstance(metadata, dict) and metadata.get("kind") == RANDOMIZED_KIND:
+            if drag_variation > MAX_TRAINED_VARIATION:
+                raise ValueError("X4 v3 supports --drag-variation up to 0.20")
+            self.drag_group_scales = draw_drag_scales(drag_variation, wind_seed)
+            self.network = FixedDragWindAero(
+                load_randomized_checkpoint(metadata), self.drag_group_scales,
+            ).eval()
+        else:
+            self.network, metadata = load_checkpoint(checkpoint_path)
         self.wind_max_horizontal_m_s = self.network.wind_max_horizontal_m_s
         if self.wind_max_horizontal_m_s != validated.wind_max_horizontal_m_s:
             raise ValueError("X4 checkpoint wind limit differs from runtime reference")

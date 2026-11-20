@@ -114,13 +114,13 @@ python scripts/run_simulation.py
 
 ## 实现方法
 
-默认 **pinn-x4** 后端在每步以同一飞机状态计算有风、无风的加速度差：
+默认 **pinn-x4** 后端（X4 PINN v3）在每步以同一飞机状态计算有风、无风的加速度差：
 
 $$
 \mathbf a_{\mathrm{wind}}^W
 =P_{xy}R_{WB}\bigl[
-g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B)
--g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B)
+g_\theta(R_{WB}^{T}(\mathbf v_O^W-\mathbf w^W),\boldsymbol\omega^B,\mathbf s)
+-g_\theta(R_{WB}^{T}\mathbf v_O^W,\boldsymbol\omega^B,\mathbf s)
 \bigr].
 $$
 
@@ -128,7 +128,35 @@ $R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度�
 
 默认水平等效阻力面积为 **0.25 m²**。按参考工况计算的增益作用于世界坐标 XY 加速度，随后依次经过 EMA（$\alpha=0.05$）、各轴 ±6 m/s² 限幅，再乘整机质量 8.0004 kg，施加到根 body。
 
-模型由二次阻力先验与 **6→64→64→3 Tanh 残差网络**组成。早期 v1 试验权重使用 **3,000 组有风/无风合成配对样本**，参考模型来自 XML 提取的 29 个部件阻力代理；采样/训练 seed 为 7/42。该模型采用简化参考数据，未做实机气动标定。
+v3 使用机体系相对气速、机体系角速度和三组阻力倍率 $\mathbf s$，共九维。每组采用二次阻力先验与学习残差，再按倍率合成总响应。默认倍率均为 1、阵风幅值为 0。使用 `--drag-variation 0.20 --gust-amplitude 1.5 --gust-period 4 --wind-seed 42` 可启用分组阻力随机化与阵风。
+
+### PINN v3 数据怎么生成
+
+训练标签来自 29 个由 X4-950 与 Airbot Play 的 XML 提取的固定几何代理。对每个合成状态，用相同的根点速度、姿态、角速度、几何和阻力倍率计算两次，一次使用瞬时来流 $\mathbf w^W(t)$，一次将环境风设为零。对代理 $j$，先计算点速度在代理局部坐标系中的分量，再按轴计算二次阻力：
+
+$$
+\begin{aligned}
+\mathbf u_j(\mathbf w)
+&=Q_j^\mathsf{T}\!\left[R_{WB}^\mathsf{T}(\mathbf v_O^W-\mathbf w^W)
+                          +\boldsymbol\omega^B\times\mathbf r_j^B\right],\\
+\mathbf f_j(\mathbf w)
+&=-\tfrac12\rho\,s_{g(j)}\,(\mathbf C_D\odot\mathbf A_j)
+                   \odot\mathbf u_j(\mathbf w)\odot|\mathbf u_j(\mathbf w)|,\\
+\mathbf F^W(\mathbf w)&=R_{WB}\sum_j Q_j\mathbf f_j(\mathbf w),\\
+\mathbf y_{xy}^W&=P_{xy}\,[\mathbf F^W(\mathbf w(t))-\mathbf F^W(\mathbf 0)]/m .
+\end{aligned}
+$$
+
+$Q_j$ 将代理局部坐标映射到机体系，$\mathbf r_j^B$ 是根点到代理中心的偏移，$\mathbf A_j$ 是局部三轴参考面积，$\odot$ 表示逐元素相乘。数据保存两分支的完整三轴力、各组单位倍率响应和水平加速度增量。名义 $C_DA=0.25\,\mathrm{m^2}$ 的换算在运行时施加一次，标签生成在该换算、滤波及限幅之前。
+
+在原来的固定参数公式上加入两类随机量：
+
+| 随机量 | 抽样及进入公式的方式 |
+| --- | --- |
+| 三组阻力倍率 $s_{g(j)}$ | 机身、机臂及电机、机械臂各抽一个倍率，基础分布为 $\mathcal U(0.8,1.2)$，对组内全部代理的 $C_D A$ 同比例缩放。每个过程和有风／无风配对共用同一组倍率。 |
+| 水平阵风 | 有阵风的过程抽取峰值 $G\sim\mathcal U(0.5,2.0)$ m/s、脉冲周期 $T\sim\mathcal U(2,6)$ s，以及每个脉冲的方向 $\phi_k\sim\mathcal U(0,2\pi)$。脉冲内已过时间为 $\tau=t\bmod T$，在基准风上叠加 $G\sin^2(\pi\tau/T)(\cos\phi_k,\sin\phi_k,0)$，再将水平合风速约束在 10 m/s 内。 |
+
+$\rho=1.225\,\mathrm{kg/m^3}$、三轴基准 $C_D=1$、代理几何和质量固定。基准风按风速和风向分层，保留零风、弱风及 10 m/s 边界。状态抽样包含逆风和随风运动。每 10 对共用一个风过程及倍率抽样，按整组分成 **30,000 训练／6,000 验证／6,000 测试对**，种子分别为 **17653／18659／19663**。训练和验证排除三个倍率同时距 1 至少 0.12 的联合角落，测试单独保留 1,500 个这样的样本对。数据是参数化解析模型生成的合成样本。[v3 复现命令和验证结果](docs/models/x4-950-pinn-wind-randomized-v3.md)
 
 <details>
 <summary>PINN 训练图与技术文档</summary>
@@ -136,7 +164,7 @@ $R_{WB}$ 将机体系映射到世界系，$\mathbf v_O^W$ 为机体原点速度�
 ![PINN 试验训练与留出集误差](docs/figures/x4-950-pinn-pilot-v1.png)
 
 - [参考模型](docs/x4-950-reference-v1.md)
-- [默认宽域模型卡与复现](docs/models/x4-950-pinn-wind-10-v2.md)
+- [v2 宽域基线与复现](docs/models/x4-950-pinn-wind-10-v2.md)
 - [v1 模型卡](docs/models/x4-950-pinn-pilot-v1.md)
 - [训练报告](docs/X4_PINN_PILOT_2026-11-10.md)
 - [SITL 集成报告](docs/X4_PINN_INTEGRATION_2026-11-10.md)
